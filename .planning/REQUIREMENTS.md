@@ -23,7 +23,7 @@ Requirements for the initial release. Each maps to a roadmap phase.
 - [x] **PIN-04**: gsd-core is installed pinned to the latest version as of the cooldown date, with the cooldown applied to all of its transitive dependencies (npm `--before`)
 - [x] **PIN-05**: Claude Code CLI is installed pinned to the latest version as of the cooldown date
 - [x] **PIN-06**: A resolved version manifest (`versions.lock`) capturing exact installed versions of gsd-core (+ deps), Claude Code, and govulncheck is produced on each build
-- [ ] **PIN-07**: A pin-held verification step fails the build if any installed pinned package's publish date is after the cooldown date
+- [x] **PIN-07**: A pin-held verification step fails the build if any installed pinned package's publish date is after the cooldown date
 
 ### Network Isolation & Inference (NET)
 
@@ -93,7 +93,7 @@ Populated at roadmap creation. Each requirement maps to exactly one phase.
 | PIN-04 | Phase 1 | Complete |
 | PIN-05 | Phase 1 | Complete |
 | PIN-06 | Phase 1 | Complete |
-| PIN-07 | Phase 1 | Pending |
+| PIN-07 | Phase 1 | Complete |
 | NET-01 | Phase 3 | Pending |
 | NET-02 | Phase 3 | Pending |
 | NET-03 | Phase 3 | Pending |

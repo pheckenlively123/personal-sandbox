@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
-last_updated: "2026-06-13T22:57:43.821Z"
+status: Phase complete — ready for verification
+last_updated: "2026-06-13T23:05:57.170Z"
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 2
-  completed_plans: 1
-  percent: 0
+  completed_plans: 2
+  percent: 25
 ---
 
 # Project State: Claude Sandbox (Fedora 44 / OpenShell)
@@ -63,6 +63,7 @@ Plan: 2 of 2
 | RUN-03/RUN-04 (bind mount) in Phase 2 | Roadmap | Bind mount is configured at `openshell sandbox create` time, not at Claude launch time — belongs with lifecycle, not Claude config |
 | RUN-01/RUN-02 (Claude launch flags) in Phase 4 | Roadmap | MCP audit only meaningful after zero-egress confirmed (Phase 3); blocked plugins look like policy failures otherwise |
 | Phase 01 P01 | 427 | 3 tasks | 5 files |
+| Phase 01 P02 | 254 | 2 tasks | 4 files |
 
 ### Open Questions / Risks
 
@@ -90,3 +91,8 @@ Plan: 2 of 2
 
 ---
 *State initialized: 2026-06-13*
+
+## Decisions
+
+- [Phase ?]: re-query not cached dates
+- [Phase ?]: associative array cache

@@ -9,7 +9,7 @@
 
 ## Phases
 
-- [ ] **Phase 1: Dockerfile and Supply-Chain Pinning** - Working image that installs all tooling with rolling cooldown pinning
+- [x] **Phase 1: Dockerfile and Supply-Chain Pinning** - Working image that installs all tooling with rolling cooldown pinning (completed 2026-06-13)
 - [ ] **Phase 2: Rebuild Script and Sandbox Lifecycle** - Idempotent rebuild.sh that builds the image and recreates the sandbox cleanly
 - [ ] **Phase 3: Network Isolation and Inference Validation** - Running sandbox with zero direct egress and working model inference via the gateway
 - [ ] **Phase 4: Claude Code Launch and MCP Audit** - Claude running autonomously inside the sandbox with toolkit plugins loaded and audited
@@ -30,7 +30,7 @@
   2. The build log shows no `CACHED` entry for the `dnf update -y` step when `COOLDOWN_DATE` changes between runs — confirming the cache-bust ARG is working
   3. `govulncheck --version` inside the built image shows a release date on or before the cooldown date (build date minus 4 days), never the current day's `@latest`
   4. A `versions.lock` file records the exact pinned versions of govulncheck, gsd-core, and Claude Code CLI with their cooldown-resolved timestamps
-  5. The build fails (exit non-zero) if any pinned package's publish date is after the cooldown date (PIN-07 pin-held verification)**Plans:** 1/2 plans executed
+  5. The build fails (exit non-zero) if any pinned package's publish date is after the cooldown date (PIN-07 pin-held verification)**Plans:** 2/2 plans complete
 
 **Wave 1**
 
@@ -38,7 +38,7 @@
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 01-02-PLAN.md — Pin-held verifier (PIN-07, fail-closed) + cache-bust & negative-path guarantee tests
+- [x] 01-02-PLAN.md — Pin-held verifier (PIN-07, fail-closed) + cache-bust & negative-path guarantee tests
 
 ### Phase 2: Rebuild Script and Sandbox Lifecycle
 
@@ -91,7 +91,7 @@
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Dockerfile and Supply-Chain Pinning | 1/2 | In Progress|  |
+| 1. Dockerfile and Supply-Chain Pinning | 2/2 | Complete   | 2026-06-13 |
 | 2. Rebuild Script and Sandbox Lifecycle | 0/? | Not started | - |
 | 3. Network Isolation and Inference Validation | 0/? | Not started | - |
 | 4. Claude Code Launch and MCP Audit | 0/? | Not started | - |

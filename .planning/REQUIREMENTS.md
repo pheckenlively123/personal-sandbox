@@ -78,43 +78,50 @@ Explicitly excluded. Documented to prevent scope creep.
 
 ## Traceability
 
-Populated during roadmap creation. Each requirement maps to exactly one phase.
+Populated at roadmap creation. Each requirement maps to exactly one phase.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| IMG-01 | TBD | Pending |
-| IMG-02 | TBD | Pending |
-| IMG-03 | TBD | Pending |
-| IMG-04 | TBD | Pending |
-| IMG-05 | TBD | Pending |
-| PIN-01 | TBD | Pending |
-| PIN-02 | TBD | Pending |
-| PIN-03 | TBD | Pending |
-| PIN-04 | TBD | Pending |
-| PIN-05 | TBD | Pending |
-| PIN-06 | TBD | Pending |
-| PIN-07 | TBD | Pending |
-| NET-01 | TBD | Pending |
-| NET-02 | TBD | Pending |
-| NET-03 | TBD | Pending |
-| NET-04 | TBD | Pending |
-| NET-05 | TBD | Pending |
-| RUN-01 | TBD | Pending |
-| RUN-02 | TBD | Pending |
-| RUN-03 | TBD | Pending |
-| RUN-04 | TBD | Pending |
-| BLD-01 | TBD | Pending |
-| BLD-02 | TBD | Pending |
-| BLD-03 | TBD | Pending |
-| BLD-04 | TBD | Pending |
-| BLD-05 | TBD | Pending |
-| BLD-06 | TBD | Pending |
+| IMG-01 | Phase 1 | Pending |
+| IMG-02 | Phase 1 | Pending |
+| IMG-03 | Phase 1 | Pending |
+| IMG-04 | Phase 1 | Pending |
+| IMG-05 | Phase 1 | Pending |
+| PIN-01 | Phase 1 | Pending |
+| PIN-02 | Phase 1 | Pending |
+| PIN-03 | Phase 1 | Pending |
+| PIN-04 | Phase 1 | Pending |
+| PIN-05 | Phase 1 | Pending |
+| PIN-06 | Phase 1 | Pending |
+| PIN-07 | Phase 1 | Pending |
+| NET-01 | Phase 3 | Pending |
+| NET-02 | Phase 3 | Pending |
+| NET-03 | Phase 3 | Pending |
+| NET-04 | Phase 3 | Pending |
+| NET-05 | Phase 3 | Pending |
+| RUN-01 | Phase 4 | Pending |
+| RUN-02 | Phase 4 | Pending |
+| RUN-03 | Phase 2 | Pending |
+| RUN-04 | Phase 2 | Pending |
+| BLD-01 | Phase 2 | Pending |
+| BLD-02 | Phase 2 | Pending |
+| BLD-03 | Phase 2 | Pending |
+| BLD-04 | Phase 2 | Pending |
+| BLD-05 | Phase 2 | Pending |
+| BLD-06 | Phase 2 | Pending |
 
 **Coverage:**
 - v1 requirements: 27 total
-- Mapped to phases: 0 (filled by roadmap)
-- Unmapped: 27 ⚠️ (resolved at roadmap creation)
+- Mapped to phases: 27
+- Unmapped: 0 (all requirements mapped)
+
+| Phase | Requirements | Count |
+|-------|-------------|-------|
+| Phase 1: Dockerfile and Supply-Chain Pinning | IMG-01..05, PIN-01..07 | 12 |
+| Phase 2: Rebuild Script and Sandbox Lifecycle | BLD-01..06, RUN-03, RUN-04 | 8 |
+| Phase 3: Network Isolation and Inference Validation | NET-01..05 | 5 |
+| Phase 4: Claude Code Launch and MCP Audit | RUN-01, RUN-02 | 2 |
 
 ---
 *Requirements defined: 2026-06-13*
-*Last updated: 2026-06-13 after initial definition*
+*Last updated: 2026-06-13 after roadmap creation — traceability complete*

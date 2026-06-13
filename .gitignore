@@ -1,0 +1,5 @@
+# Generated build artifacts — produced by scripts/build-and-lock.sh
+# These are outputs, not source files; regenerated on each build
+versions.lock
+versions-npm.json
+versions-govulncheck.txt

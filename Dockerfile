@@ -31,13 +31,15 @@ ENV PATH="${PATH}:/root/go/bin"
 RUN go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
 
 # Step 4: gsd-core via npm — top-level pin + transitive cooldown via --before (PIN-04, D-02).
+# --before must use end-of-day UTC (T23:59:59Z) to include versions published on the cutoff day
+# (Pitfall 2: inclusive end-of-day cutoff). COOLDOWN_DATE is YYYY-MM-DD; append T23:59:59Z here.
 # gsd-core --claude --global runs bin/install.js which writes Claude hooks to /root/.claude/ (Pitfall 5).
-RUN npm install -g @opengsd/gsd-core@${GSD_CORE_VERSION} --before=${COOLDOWN_DATE} && \
+RUN npm install -g @opengsd/gsd-core@${GSD_CORE_VERSION} --before="${COOLDOWN_DATE}T23:59:59Z" && \
     gsd-core --claude --global
 
 # Step 5: Claude Code CLI via npm — top-level pin + transitive cooldown via --before (PIN-05).
-# --before pins all transitive deps to versions published on or before COOLDOWN_DATE.
-RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} --before=${COOLDOWN_DATE}
+# Same end-of-day cutoff to include versions published on the cutoff day itself.
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} --before="${COOLDOWN_DATE}T23:59:59Z"
 
 # Step 6: Clone claude-engineering-toolkit — latest HEAD, no cooldown (IMG-05).
 # Operator-maintained fork is trusted (T-01-05 accept). Must clone at build time;

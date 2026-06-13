@@ -1,0 +1,12 @@
+# Exclude planning artifacts from build context
+.planning/
+
+# Exclude git history
+.git/
+
+# Exclude generated lock files (versions.lock is a build output, not an input)
+*.lock
+
+# Exclude generated version snapshots
+versions-npm.json
+versions-govulncheck.txt

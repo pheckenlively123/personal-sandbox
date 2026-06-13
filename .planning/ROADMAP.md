@@ -30,11 +30,11 @@
   2. The build log shows no `CACHED` entry for the `dnf update -y` step when `COOLDOWN_DATE` changes between runs — confirming the cache-bust ARG is working
   3. `govulncheck --version` inside the built image shows a release date on or before the cooldown date (build date minus 4 days), never the current day's `@latest`
   4. A `versions.lock` file records the exact pinned versions of govulncheck, gsd-core, and Claude Code CLI with their cooldown-resolved timestamps
-  5. The build fails (exit non-zero) if any pinned package's publish date is after the cooldown date (PIN-07 pin-held verification)**Plans:** 2 plans
+  5. The build fails (exit non-zero) if any pinned package's publish date is after the cooldown date (PIN-07 pin-held verification)**Plans:** 1/2 plans executed
 
 **Wave 1**
 
-- [ ] 01-01-PLAN.md — Walking-skeleton resolve->build->lock loop (resolver, Dockerfile, build-and-lock driver, versions.lock)
+- [x] 01-01-PLAN.md — Walking-skeleton resolve->build->lock loop (resolver, Dockerfile, build-and-lock driver, versions.lock)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -91,7 +91,7 @@
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Dockerfile and Supply-Chain Pinning | 0/2 | Planned | - |
+| 1. Dockerfile and Supply-Chain Pinning | 1/2 | In Progress|  |
 | 2. Rebuild Script and Sandbox Lifecycle | 0/? | Not started | - |
 | 3. Network Isolation and Inference Validation | 0/? | Not started | - |
 | 4. Claude Code Launch and MCP Audit | 0/? | Not started | - |

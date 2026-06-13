@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-last_updated: "2026-06-13T22:43:17.492Z"
+last_updated: "2026-06-13T22:57:43.821Z"
 progress:
   total_phases: 4
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  total_plans: 2
+  completed_plans: 1
   percent: 0
 ---
 
@@ -26,6 +26,8 @@ progress:
 
 ## Current Position
 
+Phase: 01 (dockerfile-and-supply-chain-pinning) — EXECUTING
+Plan: 2 of 2
 **Phase**: 1 — Dockerfile and Supply-Chain Pinning
 **Plan**: None started
 **Status**: Not started
@@ -60,6 +62,7 @@ progress:
 | 4 phases at coarse granularity | Roadmap | Research's suggested 4-phase structure maps cleanly to the 4 requirement clusters; phases have distinct failure modes worth isolating |
 | RUN-03/RUN-04 (bind mount) in Phase 2 | Roadmap | Bind mount is configured at `openshell sandbox create` time, not at Claude launch time — belongs with lifecycle, not Claude config |
 | RUN-01/RUN-02 (Claude launch flags) in Phase 4 | Roadmap | MCP audit only meaningful after zero-egress confirmed (Phase 3); blocked plugins look like policy failures otherwise |
+| Phase 01 P01 | 427 | 3 tasks | 5 files |
 
 ### Open Questions / Risks
 

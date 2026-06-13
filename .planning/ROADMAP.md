@@ -29,7 +29,9 @@
   3. `govulncheck --version` inside the built image shows a release date on or before the cooldown date (build date minus 4 days), never the current day's `@latest`
   4. A `versions.lock` file records the exact pinned versions of govulncheck, gsd-core, and Claude Code CLI with their cooldown-resolved timestamps
   5. The build fails (exit non-zero) if any pinned package's publish date is after the cooldown date (PIN-07 pin-held verification)
-**Plans**: TBD
+**Plans:** 2 plans
+- [ ] 01-01-PLAN.md — Walking-skeleton resolve->build->lock loop (resolver, Dockerfile, build-and-lock driver, versions.lock)
+- [ ] 01-02-PLAN.md — Pin-held verifier (PIN-07, fail-closed) + cache-bust & negative-path guarantee tests
 
 ### Phase 2: Rebuild Script and Sandbox Lifecycle
 **Goal**: A single `rebuild.sh` script runs end-to-end: computes the rolling cooldown, resolves versions, builds the image with podman, tears down any existing sandbox, and creates a new sandbox with the `~/claudeshared` bind mount configured and correct UID alignment.
@@ -73,7 +75,7 @@
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Dockerfile and Supply-Chain Pinning | 0/? | Not started | - |
+| 1. Dockerfile and Supply-Chain Pinning | 0/2 | Planned | - |
 | 2. Rebuild Script and Sandbox Lifecycle | 0/? | Not started | - |
 | 3. Network Isolation and Inference Validation | 0/? | Not started | - |
 | 4. Claude Code Launch and MCP Audit | 0/? | Not started | - |

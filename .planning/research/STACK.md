@@ -27,16 +27,20 @@ openshell sandbox create --from <source> [flags] [-- <command>...]
 | Explicit Dockerfile path | Builds that Dockerfile into the local Docker daemon |
 | Full container image reference (e.g. `registry.io/img:tag`) | Pulls the image directly |
 
-**For a local build:** the gateway must be a local gateway (the CLI builds through the local Docker daemon). Building from a Dockerfile requires Docker; the local gateway is Podman-backed but the build step uses Docker. Concretely:
+**For a local build:** passing a directory/Dockerfile to `--from` makes OpenShell build through the local **Docker daemon**. This project requires the image to be built with **podman** instead, so the rebuild script builds the image itself and passes the resulting **image reference** to `--from` (the fourth form above):
 
 ```bash
+# 1. Build the image with podman (NOT the OpenShell-managed Docker-daemon build)
+podman build -t claude-sandbox:<tag> ./sandbox
+
+# 2. Create the sandbox from the podman-built image reference
 openshell sandbox create \
   --name claude-sandbox \
-  --from ./sandbox \
+  --from claude-sandbox:<tag> \
   -- bash
 ```
 
-The `sandbox/` directory must contain a `Dockerfile`. OpenShell builds it (`docker build`), creates a gateway-managed sandbox from the result, and starts the command inside it.
+The `sandbox/` directory must contain a `Dockerfile` (podman reads it). **Open build-phase question:** podman and the Docker daemon keep separate local image stores, so the plan must confirm how OpenShell resolves a podman-built image reference (reads podman's store, vs. needing `podman save`/load or a local registry). Do **not** use `--from ./sandbox`, which would trigger the Docker-daemon build path this project is avoiding.
 
 **Command placement:** the command to run goes after `--`, e.g. `-- claude`. If omitted, an interactive shell is launched.
 
@@ -58,7 +62,7 @@ This is already enabled in the operator's gateway.toml. The gateway uses the Pod
 ```bash
 openshell sandbox create \
   --name claude-sandbox \
-  --from ./sandbox \
+  --from claude-sandbox:<tag> \
   --driver-config-json '{"podman":{"mounts":[{"type":"bind","source":"/Users/<user>/claudeshared","target":"/claudeshared","read_only":false}]}}' \
   -- claude
 ```
@@ -433,7 +437,7 @@ Then at runtime:
 claude --dangerously-skip-permissions --plugin-dir /toolkit
 ```
 
-**Why clone at build time (not runtime):** The container has zero egress at runtime. The git clone must happen during the Docker build phase, which has network access. Cloning at HEAD (no cooldown) is intentional — the operator maintains the fork.
+**Why clone at build time (not runtime):** The container has zero egress at runtime. The git clone must happen during the podman build phase, which has network access. Cloning at HEAD (no cooldown) is intentional — the operator maintains the fork.
 
 **Note on `--plugin-url`:** Claude also supports `--plugin-url <url>` to fetch a `.zip` plugin at startup, but this requires network egress at runtime, which is blocked by the zero-egress policy.
 
@@ -517,7 +521,7 @@ print(eligible[-1][0])
   "
 )
 
-docker build \
+podman build \
   --build-arg COOLDOWN_DATE="${COOLDOWN_DATE}" \
   --build-arg GOVULNCHECK_VERSION="${GOVULNCHECK_VERSION}" \
   --build-arg GSD_CORE_VERSION="${GSD_CORE_VERSION}" \
@@ -527,7 +531,7 @@ docker build \
 
 openshell sandbox create \
   --name claude-sandbox \
-  --from ./sandbox \
+  --from claude-sandbox:${BUILD_DATE} \
   --policy ./sandbox/policy.yaml \
   --driver-config-json "{\"podman\":{\"mounts\":[{\"type\":\"bind\",\"source\":\"${HOME}/claudeshared\",\"target\":\"/claudeshared\",\"read_only\":false}]}}" \
   -- bash -c 'ANTHROPIC_BASE_URL=https://inference.local ANTHROPIC_API_KEY=unused claude --dangerously-skip-permissions --plugin-dir /toolkit'

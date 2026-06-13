@@ -12,7 +12,7 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│  BUILD TIME  (network allowed — Docker build phase)              │
+│  BUILD TIME  (network allowed — podman build phase)              │
 │                                                                  │
 │  ┌──────────────────────────────────────────────────────────┐    │
 │  │  Dockerfile  (Fedora 44 base)                            │    │
@@ -26,7 +26,7 @@
 │                       ↑                                          │
 │            rebuild.sh computes cooldown_date (today − 4d)        │
 │            resolves pinned versions → writes versions.lock       │
-│            passes ARGs into Docker build                         │
+│            passes ARGs into podman build                         │
 └──────────────────────────────────────────────────────────────────┘
                               │
                               │  openshell sandbox create --from .
@@ -90,12 +90,12 @@
 |-----------|----------------|----------------|
 | **Dockerfile** | Define the immutable build-time environment: OS packages, Go toolchain, npm globals, toolkit clone | Fedora 44 base; build args carry pinned versions computed by rebuild.sh |
 | **rebuild.sh** | Orchestrate: compute cooldown date, resolve pinned versions, invoke `openshell sandbox create`, apply policy, store lockfile | Bash script on host; runs before every rebuild |
-| **versions.lock** | Record the exact versions installed so the build is auditable and re-pinnable | JSON or plaintext written by rebuild.sh before `docker build` |
+| **versions.lock** | Record the exact versions installed so the build is auditable and re-pinnable | JSON or plaintext written by rebuild.sh before `podman build` |
 | **policy.yaml** | Declare the zero-egress network policy for the running sandbox | YAML passed to `openshell sandbox create --policy` or applied post-create with `openshell policy set` |
 | **OpenShell gateway** | Broker inference (proxy API calls); hold provider credentials; enforce L7 policy; manage sandbox lifecycle | `openshell-gateway` process on host at `https://127.0.0.1:17670` |
 | **openshell-sandbox (supervisor)** | In-container process: fetches InferenceBundle + provider env from gateway, acts as local L7 inference proxy, enforces Landlock | Sidecar to the sandboxed workload; part of the OpenShell supervisor image |
 | **Claude Code CLI** | Autonomous AI agent; sends inference requests to local supervisor proxy | `claude --dangerously-skip-permissions --plugin-dir ...` |
-| **claude-engineering-toolkit** | Plugin directory baked into the image at build time | Cloned via `git clone` during Docker build (no cooldown — operator-controlled fork) |
+| **claude-engineering-toolkit** | Plugin directory baked into the image at build time | Cloned via `git clone` during podman build (no cooldown — operator-controlled fork) |
 | **~/claudeshared (host path)** | Shared workspace: operator clones repos here; Claude reads/writes inside sandbox via bind mount | Bind-mounted rw at sandbox create time via `--driver-config-json` |
 
 ---
@@ -126,7 +126,7 @@ personal-sandbox/              # repo root
 
 ### Pattern 1: Build-time / Runtime Separation
 
-**What:** All package downloads happen during `docker build` (which has unrestricted network). The running sandbox has a zero-egress policy applied after creation. These two concerns are never mixed.
+**What:** All package downloads happen during `podman build` (which has unrestricted network). The running sandbox has a zero-egress policy applied after creation. These two concerns are never mixed.
 
 **When to use:** Any time you need reproducible supply-chain isolation without baking credentials or network assumptions into the image.
 
@@ -140,7 +140,7 @@ rebuild.sh
   ├── resolve_npm_version gsd-core $COOLDOWN_DATE
   ├── resolve_go_version golang.org/x/vuln $COOLDOWN_DATE
   ├── write versions.lock
-  ├── docker build --build-arg CLAUDE_VERSION=... --build-arg ...
+  ├── podman build --build-arg CLAUDE_VERSION=... --build-arg ...
   ├── openshell sandbox delete claude-sandbox --yes 2>/dev/null || true
   ├── openshell sandbox create --from . --name claude-sandbox \
   │       --policy policy.yaml \
@@ -175,11 +175,11 @@ api.anthropic.com
 
 ### Pattern 3: Version Pinning by Cooldown Date
 
-**What:** The rebuild script computes `COOLDOWN_DATE = today − 4 days`. For each package that needs pinning, it queries the package registry's time metadata, filters to versions published before the cooldown date, and takes the maximum semver. This version is passed as a Docker build arg and recorded in `versions.lock`.
+**What:** The rebuild script computes `COOLDOWN_DATE = today − 4 days`. For each package that needs pinning, it queries the package registry's time metadata, filters to versions published before the cooldown date, and takes the maximum semver. This version is passed as a podman build arg and recorded in `versions.lock`.
 
 **When to use:** For govulncheck, gsd-core, and Claude Code CLI. Not for RPM packages (managed by dnf, locked to Fedora 44's snapshot) and not for claude-engineering-toolkit (operator-controlled fork, trusted at latest HEAD).
 
-**Trade-offs:** Adds a network call to the registry at rebuild time (from the host, before the Docker build). Requires the host to have curl/python/node available for the resolution script. The Go module proxy does not have a native "list versions before date" query; the approach is to query `proxy.golang.org/golang.org/x/vuln/@v/list` for all versions, then query `/@v/<version>.info` for timestamps and filter — or use the Go sum DB's time metadata.
+**Trade-offs:** Adds a network call to the registry at rebuild time (from the host, before the podman build). Requires the host to have curl/python/node available for the resolution script. The Go module proxy does not have a native "list versions before date" query; the approach is to query `proxy.golang.org/golang.org/x/vuln/@v/list` for all versions, then query `/@v/<version>.info` for timestamps and filter — or use the Go sum DB's time metadata.
 
 **npm resolution (registry time API):**
 ```bash
@@ -214,7 +214,7 @@ rebuild.sh (host)
     │
     ├─ write versions.lock (pinned versions + cooldown_date + timestamps)
     │
-    ├─ docker build --build-arg CLAUDE_VERSION=X.Y.Z \
+    ├─ podman build --build-arg CLAUDE_VERSION=X.Y.Z \
     │              --build-arg GSD_CORE_VERSION=A.B.C \
     │              --build-arg GOVULNCHECK_VERSION=vM.N.O \
     │     (Dockerfile pulls from registries during build — network allowed)
@@ -299,7 +299,7 @@ At sandbox startup (inside container):
 |------|----|---------|---------|
 | rebuild.sh | npm registry | HTTPS (host) | Version timestamp queries |
 | rebuild.sh | Go module proxy | HTTPS (host) | Module version queries |
-| rebuild.sh | Docker daemon | Docker API / CLI | Image build |
+| rebuild.sh | podman | podman CLI | Image build (`podman build`) |
 | rebuild.sh | openshell-gateway | openshell CLI / gRPC | Create sandbox, attach provider, apply policy |
 | openshell-sandbox (in container) | openshell-gateway | gRPC mTLS over agent socket | GetInferenceBundle, GetSandboxProviderEnvironment, policy sync, logs |
 | Claude Code (in container) | openshell-sandbox supervisor | localhost HTTP | Inference requests (POST /v1/messages) |
@@ -327,25 +327,27 @@ The dependency graph between components determines this ordering:
 2. COOLDOWN DATE RESOLUTION (rebuild.sh, step 1)
    └── Compute COOLDOWN_DATE = today − 4 days
    └── Query registries and write versions.lock
-   (Must happen before docker build so build args are ready)
+   (Must happen before podman build so build args are ready)
 
-3. DOCKER BUILD (rebuild.sh, step 2)
+3. PODMAN BUILD (rebuild.sh, step 2)
    └── Depends on: versions.lock (provides pinned build args)
    └── Depends on: network access (dnf, go install, npm, git clone)
-   └── Output: local Docker image tagged for openshell sandbox create
+   └── Output: local podman image tagged for openshell sandbox create
 
 4. SANDBOX DELETE (rebuild.sh, step 3, idempotent)
    └── openshell sandbox delete <name> --yes 2>/dev/null || true
    (Must happen before create to avoid "sandbox already exists" error)
 
 5. SANDBOX CREATE (rebuild.sh, step 4)
-   └── Depends on: Docker image (step 3)
+   └── Depends on: podman image (step 3)
    └── Depends on: registered provider (step 1)
    └── Depends on: enable_bind_mounts = true in gateway.toml (pre-configured)
-   └── openshell sandbox create --from . --name <name> --policy policy.yaml \
+   └── openshell sandbox create --from <image-ref> --name <name> --policy policy.yaml \
            --driver-config-json <bind-mount-spec> \
            --provider anthropic-provider
-   (Builds image into local daemon if needed, creates sandbox, attaches provider, applies policy)
+   (Creates sandbox from the podman-built image reference, attaches provider, applies policy.
+    NOTE: build-phase plan must confirm OpenShell resolves a podman-built image; do NOT use
+    --from . which would trigger an OpenShell-managed Docker-daemon build)
 
 6. LAUNCH (rebuild.sh, step 5 — or operator-initiated)
    └── Depends on: sandbox in Ready phase (step 5)
@@ -366,7 +368,7 @@ The dependency graph between components determines this ordering:
 |---------|-------|-------------|-------|
 | npm registry (registry.npmjs.org) | Build (host) | HTTPS REST, time metadata | Used for cooldown version resolution; no auth needed for public packages |
 | Go module proxy (proxy.golang.org) | Build (host) | HTTPS REST, `/@v/<version>.info` | Used for govulncheck version resolution; timestamp in `Time` field of `.info` response |
-| Docker daemon (Rancher Desktop) | Build | Docker CLI / `openshell sandbox create --from .` | OpenShell builds the image before creating the sandbox |
+| podman (Rancher Desktop) | Build | `podman build` → `openshell sandbox create --from <image-ref>` | rebuild.sh builds the image with podman; OpenShell creates the sandbox from the image reference |
 | api.anthropic.com | Runtime (via gateway only) | HTTPS/REST proxied by gateway | Never reached directly by the sandbox |
 | github.com | Build only | git clone | For claude-engineering-toolkit; no cooldown, latest HEAD |
 
@@ -388,7 +390,7 @@ The dependency graph between components determines this ordering:
 
 **What people do:** `ENV ANTHROPIC_API_KEY=sk-ant-...` or `ARG ANTHROPIC_API_KEY` in the Dockerfile.
 
-**Why it's wrong:** The key ends up in the image layers, is visible in `docker history`, and is leaked if the image is ever pushed or inspected. OpenShell's provider mechanism exists specifically to avoid this.
+**Why it's wrong:** The key ends up in the image layers, is visible in `podman history`, and is leaked if the image is ever pushed or inspected. OpenShell's provider mechanism exists specifically to avoid this.
 
 **Do this instead:** Register the provider once with `openshell provider create` and attach it with `--provider` at sandbox create time. The gateway injects the key at runtime via `GetSandboxProviderEnvironment`.
 
@@ -406,7 +408,7 @@ The dependency graph between components determines this ordering:
 
 **Why it's wrong:** Computing inside the Dockerfile means the resolved version is buried in layer history and invisible in the repo. Hardcoding means rebuilds don't roll the window — the whole point of the rolling cooldown is that each rebuild re-pins to "4 days before today", not a static date.
 
-**Do this instead:** Compute versions in rebuild.sh before `docker build`. Write them to versions.lock (committed or at least archived). Pass as `--build-arg` so they appear in the build's argument record and can be reproduced.
+**Do this instead:** Compute versions in rebuild.sh before `podman build`. Write them to versions.lock (committed or at least archived). Pass as `--build-arg` so they appear in the build's argument record and can be reproduced.
 
 ### Anti-Pattern 4: Using --upload Instead of Bind Mount for ~/claudeshared
 

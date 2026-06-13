@@ -9,15 +9,15 @@
 
 This project is a single-developer local sandbox for running Claude Code with `--dangerously-skip-permissions` safely. The pattern is well-established: a Dockerfile defines an immutable image built during a network-allowed phase, and an NVIDIA OpenShell sandbox applies a zero-egress runtime policy so the running container cannot reach the open internet directly. All model inference is brokered through the OpenShell gateway's `inference.local` endpoint, which injects credentials without exposing them in the image. This is not a Docker-only container — it is an OpenShell-managed sandbox, meaning the `openshell` CLI handles lifecycle, policy enforcement, and gateway credential brokering.
 
-The recommended approach is a `Dockerfile` (Fedora 44 base) plus an idempotent `rebuild.sh` that computes a rolling 4-day cooldown date, queries npm and Go module proxy registries to resolve pinned versions, passes them as Docker build args, then tears down and recreates the sandbox. RPM packages (`golang`, `golangci-lint`) are installed during `dnf update -y`; cooldown-sensitive packages (`govulncheck`, `gsd-core`, Claude Code CLI) are pinned to the latest version published before the cooldown date. The `claude-engineering-toolkit` fork is cloned at HEAD during build (no cooldown) since the operator maintains it. A `~/claudeshared` host directory is bind-mounted read-write into the sandbox for repo work.
+The recommended approach is a `Dockerfile` (Fedora 44 base) plus an idempotent `rebuild.sh` that computes a rolling 4-day cooldown date, queries npm and Go module proxy registries to resolve pinned versions, passes them as podman build args, then tears down and recreates the sandbox. RPM packages (`golang`, `golangci-lint`) are installed during `dnf update -y`; cooldown-sensitive packages (`govulncheck`, `gsd-core`, Claude Code CLI) are pinned to the latest version published before the cooldown date. The `claude-engineering-toolkit` fork is cloned at HEAD during build (no cooldown) since the operator maintains it. A `~/claudeshared` host directory is bind-mounted read-write into the sandbox for repo work.
 
-The key risks are: (1) the inference gateway misconfigured before sandbox creation causes Claude to hang for ~290 seconds per call, (2) adding `api.anthropic.com` to the egress policy defeats the zero-egress guarantee, (3) Docker layer caching of `dnf update -y` silently reuses stale packages unless a changing ARG precedes the layer, and (4) UID mismatch between the macOS host user and the container user can make the bind mount read-only from Claude's perspective. All of these have clear prevention strategies documented in the research.
+The key risks are: (1) the inference gateway misconfigured before sandbox creation causes Claude to hang for ~290 seconds per call, (2) adding `api.anthropic.com` to the egress policy defeats the zero-egress guarantee, (3) podman layer caching of `dnf update -y` silently reuses stale packages unless a changing ARG precedes the layer, and (4) UID mismatch between the macOS host user and the container user can make the bind mount read-only from Claude's perspective. All of these have clear prevention strategies documented in the research.
 
 ## Key Findings
 
 ### Recommended Stack
 
-The complete, version-verified stack is: Fedora 44 base image (`docker.io/library/fedora:44`, available for amd64 and arm64); Go 1.26.4 and golangci-lint 2.11.3 via Fedora 44 RPM; govulncheck v1.3.0 via `go install` (pinned); `@opengsd/gsd-core@1.4.0` and `@anthropic-ai/claude-code@2.1.169` via npm with `--before=2026-06-09`; claude-engineering-toolkit cloned at HEAD via `git clone`. The `npm --before=<date>` flag (npm v11, bundled with Node on this host) applies cooldown pinning to all transitive dependencies, which is not achievable with yarn or pnpm. Go has no equivalent native flag — version resolution must happen in the rebuild script before `docker build` by querying `proxy.golang.org` timestamps. The OpenShell CLI (v0.0.62) is already installed and the gateway's Podman driver already has `enable_bind_mounts = true`.
+The complete, version-verified stack is: Fedora 44 base image (`docker.io/library/fedora:44`, available for amd64 and arm64); Go 1.26.4 and golangci-lint 2.11.3 via Fedora 44 RPM; govulncheck v1.3.0 via `go install` (pinned); `@opengsd/gsd-core@1.4.0` and `@anthropic-ai/claude-code@2.1.169` via npm with `--before=2026-06-09`; claude-engineering-toolkit cloned at HEAD via `git clone`. The `npm --before=<date>` flag (npm v11, bundled with Node on this host) applies cooldown pinning to all transitive dependencies, which is not achievable with yarn or pnpm. Go has no equivalent native flag — version resolution must happen in the rebuild script before `podman build` by querying `proxy.golang.org` timestamps. The OpenShell CLI (v0.0.62) is already installed and the gateway's Podman driver already has `enable_bind_mounts = true`.
 
 **Core technologies:**
 - **Fedora 44 (`fedora:44`):** Base image — official, multi-arch, ships Go 1.26 and golangci-lint 2.11.3 in standard repos
@@ -42,7 +42,7 @@ The complete, version-verified stack is: Fedora 44 base image (`docker.io/librar
 - Go toolchain, golangci-lint, govulncheck installed and functional
 
 **Should have (differentiators):**
-- `COOLDOWN_DATE` ARG before `dnf update` layer to bust Docker cache on each rebuild
+- `COOLDOWN_DATE` ARG before `dnf update` layer to bust the podman build cache on each rebuild
 - `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` in entrypoint to suppress telemetry noise
 - `versions.lock` artifact recording exact resolved versions with publish dates
 - Preflight check in rebuild script: assert `openshell inference get` shows configured provider before `sandbox create`
@@ -63,7 +63,7 @@ The architecture separates concerns into two strict phases: build-time (unrestri
 1. **Dockerfile** — defines the immutable image; all install steps run here; accepts cooldown version build args
 2. **rebuild.sh** — orchestrator: computes cooldown date, resolves pinned versions, builds image, deletes old sandbox, creates new sandbox with policy and bind mount
 3. **policy.yaml** — zero-egress network policy with empty `network_policies`; passed via `--policy` at `sandbox create` time
-4. **versions.lock** — generated artifact recording exact resolved versions + publish dates; written by rebuild.sh before `docker build`
+4. **versions.lock** — generated artifact recording exact resolved versions + publish dates; written by rebuild.sh before `podman build`
 5. **OpenShell gateway** — host-side broker: holds credentials, proxies inference, enforces L7 policy
 6. **openshell-sandbox supervisor** — in-container sidecar: L7 inference proxy and credential injector
 
@@ -73,7 +73,7 @@ The architecture separates concerns into two strict phases: build-time (unrestri
 
 2. **Allowlisting `api.anthropic.com` in the egress policy** — voids the zero-egress guarantee; Claude with `--dangerously-skip-permissions` can exfiltrate data via API payloads. Prevention: policy must have zero Anthropic endpoint entries; inference routes only through `inference.local`.
 
-3. **Docker layer caching `dnf update -y`** — rebuilds silently reuse stale RPM packages, defeating the rolling cooldown. Prevention: place `ARG COOLDOWN_DATE` before the `dnf update` line so a changed date busts the cache.
+3. **podman layer caching `dnf update -y`** — rebuilds silently reuse stale RPM packages, defeating the rolling cooldown. Prevention: place `ARG COOLDOWN_DATE` before the `dnf update` line so a changed date busts the cache.
 
 4. **`~/claudeshared` UID mismatch on macOS** — rootless Podman maps non-root container UIDs into subordinate host UID ranges, making the bind mount effectively read-only for Claude. Prevention: run the container process as UID 0 (which rootless Podman maps to the actual macOS user) or use `--userns=keep-id`.
 
@@ -84,10 +84,10 @@ The architecture separates concerns into two strict phases: build-time (unrestri
 Based on research, suggested phase structure:
 
 ### Phase 1: Dockerfile and Supply-Chain Pinning
-**Rationale:** Everything else depends on a correctly built image. The cooldown pinning logic and Docker cache-busting must be established first — they are the foundation for reproducibility claims.
+**Rationale:** Everything else depends on a correctly built image. The cooldown pinning logic and podman cache-busting must be established first — they are the foundation for reproducibility claims.
 **Delivers:** A working Dockerfile that installs all tools from the verified stack with cooldown pinning; a `versions.lock` artifact.
 **Addresses:** All P1 tooling features (Go, golangci-lint, govulncheck, gsd-core, Claude Code CLI, claude-engineering-toolkit)
-**Avoids:** Pitfall 5 (npm lockfile), Pitfall 6 (go install @latest), Pitfall 7 (Docker cache / dnf stale packages)
+**Avoids:** Pitfall 5 (npm lockfile), Pitfall 6 (go install @latest), Pitfall 7 (podman cache / dnf stale packages)
 
 ### Phase 2: Rebuild Script and Sandbox Lifecycle
 **Rationale:** With the Dockerfile in place, the rebuild orchestration layer can be built. This phase produces the `rebuild.sh` that ties together version resolution, image build, sandbox teardown-and-recreate, policy application, and bind mount configuration.

@@ -145,7 +145,7 @@ This means the PROJECT.md requirement to "pin govulncheck to the latest version 
 The Go module proxy protocol does not expose a "list versions published before date X" endpoint in a way that `go install` natively understands. Developers assume that because npm supports `--before`, Go has an equivalent, but it does not.
 
 **How to avoid:**
-- Implement cooldown pinning for govulncheck by querying index.golang.org before the Docker build:
+- Implement cooldown pinning for govulncheck by querying index.golang.org before the podman build:
   ```bash
   # On the host, before building:
   COOLDOWN_DATE="2026-06-09T00:00:00Z"
@@ -168,13 +168,13 @@ The Go module proxy protocol does not expose a "list versions published before d
 
 ---
 
-### Pitfall 7: Docker Layer Cache Causes `dnf update -y` to Reuse Stale Package Metadata
+### Pitfall 7: podman Build-Layer Cache Causes `dnf update -y` to Reuse Stale Package Metadata
 
 **What goes wrong:**
-Docker's build cache caches RUN layers. If `RUN dnf update -y` is cached, the rebuild does not actually run a fresh `dnf update` — it reuses the cached layer from the previous build. This means the "rebuild applies rolling cooldown" guarantee is false: packages installed via RPM can be stuck at whatever was current during the first build.
+podman's build cache caches RUN layers. If `RUN dnf update -y` is cached, the rebuild does not actually run a fresh `dnf update` — it reuses the cached layer from the previous build. This means the "rebuild applies rolling cooldown" guarantee is false: packages installed via RPM can be stuck at whatever was current during the first build.
 
 **Why it happens:**
-Docker (and Podman build) cache layers by instruction hash. `RUN dnf update -y` always hashes to the same string, so unless a preceding layer has changed, it is served from cache. The rebuild script's goal of "re-applies the rolling cooldown each run" is defeated silently.
+podman caches build layers by instruction hash. `RUN dnf update -y` always hashes to the same string, so unless a preceding layer has changed, it is served from cache. The rebuild script's goal of "re-applies the rolling cooldown each run" is defeated silently.
 
 **How to avoid:**
 - Pass a build ARG that changes every rebuild and appears before the `dnf update` layer:
@@ -183,11 +183,11 @@ Docker (and Podman build) cache layers by instruction hash. `RUN dnf update -y` 
   RUN echo "Cooldown: ${COOLDOWN_DATE}" && dnf update -y && dnf clean all
   ```
   Then pass `--build-arg COOLDOWN_DATE=2026-06-09` in the rebuild script. Changing this value busts the cache for all subsequent layers.
-- Alternatively, always pass `--no-cache` to `docker build` / `podman build` in the rebuild script, but this rebuilds everything from scratch each time, which is slower.
+- Alternatively, always pass `--no-cache` to `podman build` in the rebuild script, but this rebuilds everything from scratch each time, which is slower.
 - The rebuild script must set `COOLDOWN_DATE` to the computed rolling window date (`build_date - 4 days`), not a hardcoded value.
 
 **Warning signs:**
-- Docker build output shows `CACHED` for the `dnf update` step on rebuilds.
+- podman build output shows `CACHED` for the `dnf update` step on rebuilds.
 - RPM package versions inside the sandbox match an old build date, not the current cooldown date.
 - `rpm -q golang` inside the sandbox shows the same version across multiple rebuilds over weeks.
 
@@ -277,7 +277,7 @@ This means the build is reproducible in spirit (same cooldown discipline) but no
 
 | Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
 |----------|-------------------|----------------|-----------------|
-| Use `--no-cache` on every docker build | Guarantees fresh packages; avoids cache stale pitfall | Slow rebuilds (full dnf update, full npm install from scratch every time) | Always acceptable; prefer the COOLDOWN_DATE ARG approach for speed |
+| Use `--no-cache` on every podman build | Guarantees fresh packages; avoids cache stale pitfall | Slow rebuilds (full dnf update, full npm install from scratch every time) | Always acceptable; prefer the COOLDOWN_DATE ARG approach for speed |
 | Skip UID mapping fix, run as root in container | Simpler Dockerfile; no mount permission issues | Security posture: container root has broader blast radius if escaping the sandbox | Acceptable for single-developer, non-shared setup |
 | Use `@latest` for govulncheck and document "this was latest at build date" without capturing exact version | Simpler Dockerfile | Non-reproducible; audit trail is vague | Never — capture the resolved version in a manifest |
 | Leave `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` unset and rely on zero-egress policy to block update calls | One less env var to manage | Auto-update calls will fail noisily, polluting logs with blocked-connection errors | Never — set the env var; it eliminates noise |
@@ -292,7 +292,7 @@ This means the build is reproducible in spirit (same cooldown discipline) but no
 | OpenShell inference gateway | Pointing `ANTHROPIC_BASE_URL` at `https://api.anthropic.com` (or omitting it) | Set `ANTHROPIC_BASE_URL=http://inference.local` inside the sandbox; the gateway translates this to the real inference provider |
 | OpenShell policy | Empty policy = open egress (permissive default) vs. empty policy = deny all | Verify with OpenShell docs/CLI which default applies; do not assume deny-by-default without testing |
 | npm cooldown pinning | Running `npm install --before` against an existing lockfile and expecting idempotent results | Delete lockfile first; `npm install --before <date>` re-resolves; `npm ci` uses lockfile verbatim |
-| Docker build cache and dnf | `RUN dnf update -y` gets cached; rebuild installs stale packages | Use `ARG COOLDOWN_DATE` before the dnf step to bust the cache on each rebuild |
+| podman build cache and dnf | `RUN dnf update -y` gets cached; rebuild installs stale packages | Use `ARG COOLDOWN_DATE` before the dnf step to bust the cache on each rebuild |
 | claude-engineering-toolkit MCP plugins | Plugins making outbound HTTP calls get blocked silently by zero-egress policy | Audit all plugin network calls; allowlist required endpoints or disable network-dependent tools |
 | ~/claudeshared mount on macOS | UID mismatch between macOS host user and container non-root UID | Run container as UID 0 (rootless: maps to host user) or use `--userns=keep-id` |
 
@@ -347,7 +347,7 @@ This means the build is reproducible in spirit (same cooldown discipline) but no
 | Claude Code runtime network calls (telemetry, auto-update, MCP) | Claude Code config phase | Set `DISABLE_NONESSENTIAL_TRAFFIC`; audit MCP plugin network calls; run in sandbox with INFO logs |
 | npm --before not used for update / lockfile present | Supply-chain pinning / Dockerfile | Dockerfile deletes lockfile before install; lockfile artifact captured after build |
 | go install @latest ignoring cooldown | Supply-chain pinning / Dockerfile | Version manifest file; Dockerfile uses explicit version ARG; verify govulncheck --version date |
-| Docker cache serving stale dnf update | Rebuild script / Dockerfile | Dockerfile uses ARG COOLDOWN_DATE before dnf step; build log shows no CACHED for dnf |
+| podman cache serving stale dnf update | Rebuild script / Dockerfile | Dockerfile uses ARG COOLDOWN_DATE before dnf step; build log shows no CACHED for dnf |
 | Build-phase vs. runtime network confusion | Claude Code config phase | Network trace inside running sandbox; no outbound connections after startup |
 | ~/claudeshared UID mismatch | Mount / permissions phase | Create file in sandbox, verify ownership on host |
 | Lockfile drift across rebuilds | Rebuild script / supply-chain | Store lockfile artifact after each build; compare lockfiles across rebuilds |
@@ -368,7 +368,7 @@ This means the build is reproducible in spirit (same cooldown discipline) but no
 - [Go Modules Reference: @latest resolution, no date-based pinning in go install](https://go.dev/ref/mod)
 - [Fedora 44: golangci-lint 2.11.3-1.fc44 in standard Fedora repos](https://packages.fedoraproject.org/pkgs/golangci-lint/golangci-lint/)
 - [Fedora 44: golang package is Go 1.26 (golang1.26 change set)](https://fedoraproject.org/wiki/Changes/golang1.26)
-- [Docker build cache: RUN dnf update cached unless preceding ARG changes](https://depot.dev/blog/ultimate-guide-to-docker-build-cache)
+- [podman build cache: RUN dnf update cached unless preceding ARG changes](https://depot.dev/blog/ultimate-guide-to-docker-build-cache)
 - [Podman rootless UID mapping: --userns=keep-id for host UID preservation on mounts](https://www.redhat.com/en/blog/debug-rootless-podman-mounted-volumes)
 - [Claude Code ANTHROPIC_BASE_URL: must point at gateway; bare domain without scheme is invalid](https://fazm.ai/blog/route-claude-api-through-custom-endpoint-anthropic-base-url)
 - [OpenShell MCP protocol layer: sandbox cannot inspect request bodies, cannot restrict MCP tool-level calls](https://deconvoluteai.com/blog/nvidia-openshell-mcp-protocol-layer)

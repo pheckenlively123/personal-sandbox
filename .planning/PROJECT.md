@@ -48,7 +48,7 @@ Claude can run fully autonomous (`--dangerously-skip-permissions`) inside a sand
 
 - **Host:** macOS (darwin), with `openshell` + `openshell-gateway` (`/opt/homebrew/bin`), `podman`, `docker` (Rancher Desktop), `nerdctl`, Node v26 / npm 11 already installed.
 - **OpenShell model:** `sandbox create --from <Dockerfile|dir|image>` accepts a Dockerfile/dir (built via the local Docker daemon) **or a full image reference**. This project builds the image with `podman build` and passes the resulting image reference to `--from`, avoiding the Docker daemon. OpenShell sandboxes are themselves Podman-backed at runtime; the build-phase plan must confirm the podman-built image is visible to OpenShell (separate docker/podman image stores). Network egress is governed by a sandbox **policy** (endpoint allowlist, e.g. `policy update --add-endpoint host:port:...`); a deny/empty policy yields zero egress. The gateway provides `inference` brokering, which is how Claude reaches a model without direct egress.
-- **Build vs runtime networking:** the Docker build phase has network (needed for `dnf update`, `go install`, npm install, git clone); the zero-egress requirement applies to the *running* sandbox via policy.
+- **Build vs runtime networking:** the podman build phase has network (needed for `dnf update`, `go install`, npm install, git clone); the zero-egress requirement applies to the *running* sandbox via policy.
 - **`~/claudeshared`** already exists on the host and is the shared workspace for cloned repos.
 - **Supply-chain intent:** pin third-party packages to versions that existed before a cooldown window (default 4 days) to avoid pulling freshly published (potentially malicious) releases.
 

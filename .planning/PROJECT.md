@@ -1,0 +1,95 @@
+# Claude Sandbox (Fedora 44 / OpenShell)
+
+## What This Is
+
+A reproducible, network-isolated development sandbox — built as an NVIDIA OpenShell sandbox from a Fedora 44 image — for running Claude Code with `--dangerously-skip-permissions` safely. The sandbox bundles a Go toolchain and the claude-engineering-toolkit plugins, applies supply-chain cooldown pinning to its dependencies, and mounts `~/claudeshared` read-write so the operator can clone repos there and do development with Claude inside the sandbox. It is for a developer who wants to give Claude elevated, autonomous permissions without exposing the host or the open internet.
+
+## Core Value
+
+Claude can run fully autonomous (`--dangerously-skip-permissions`) inside a sandbox that has **zero direct network egress** — all model inference is brokered through the OpenShell gateway — so elevated permissions can't be used to reach or exfiltrate to the open internet.
+
+## Requirements
+
+### Validated
+
+<!-- Shipped and confirmed valuable. -->
+
+(None yet — ship to validate)
+
+### Active
+
+<!-- Current scope. Building toward these. -->
+
+- [ ] Sandbox is built as an OpenShell sandbox (`openshell sandbox create --from <dir>`) from a Fedora 44 base image
+- [ ] All RPM updates applied during build (`dnf update -y`)
+- [ ] Go toolchain installed via RPM (`golang`)
+- [ ] golangci-lint installed via RPM
+- [ ] govulncheck installed via `go install`, pinned to the latest version as of the cooldown date
+- [ ] gsd-core installed, pinned to the latest version as of the cooldown date, with the same cooldown pinning extended to all of its dependencies
+- [ ] Claude Code CLI installed, pinned to the latest version as of the cooldown date
+- [ ] claude-engineering-toolkit fork cloned (`https://github.com/pheckenlWork/claude-engineering-toolkit.git`, default branch, latest HEAD)
+- [ ] Claude launched with `--plugin-dir` pointed at the cloned toolkit so its agents and skills are available
+- [ ] Claude launched with `--dangerously-skip-permissions`
+- [ ] Sandbox runtime has zero direct internet egress; model inference is brokered via the OpenShell gateway
+- [ ] `~/claudeshared` mounted read-write into the sandbox for cloning and developing repos
+- [ ] A script rebuilds the sandbox on demand (re-applies the rolling cooldown each run)
+- [ ] Cooldown is a rolling window: each rebuild pins to "latest as of 4 days before build"
+
+### Out of Scope
+
+<!-- Explicit boundaries. Includes reasoning to prevent re-adding. -->
+
+- Cooldown pinning for the claude-engineering-toolkit — operator maintains the fork, so latest HEAD is trusted
+- Direct internet egress from the running sandbox (including a direct allowlist to api.anthropic.com) — inference goes through the gateway instead; preserves zero-egress guarantee
+- GPU allocation — not required for this workload unless surfaced later
+- Multi-user / shared-host hardening beyond the single operator — single-developer tool
+
+## Context
+
+- **Host:** macOS (darwin), with `openshell` + `openshell-gateway` (`/opt/homebrew/bin`), `podman`, `docker` (Rancher Desktop), `nerdctl`, Node v26 / npm 11 already installed.
+- **OpenShell model:** `sandbox create --from <Dockerfile|dir|image>` builds the image into the local Docker daemon, then creates a sandbox. Network egress is governed by a sandbox **policy** (endpoint allowlist, e.g. `policy update --add-endpoint host:port:...`); a deny/empty policy yields zero egress. The gateway provides `inference` brokering, which is how Claude reaches a model without direct egress.
+- **Build vs runtime networking:** the Docker build phase has network (needed for `dnf update`, `go install`, npm install, git clone); the zero-egress requirement applies to the *running* sandbox via policy.
+- **`~/claudeshared`** already exists on the host and is the shared workspace for cloned repos.
+- **Supply-chain intent:** pin third-party packages to versions that existed before a cooldown window (default 4 days) to avoid pulling freshly published (potentially malicious) releases.
+
+## Constraints
+
+- **Platform**: Sandbox runtime must be NVIDIA OpenShell — built/managed via the `openshell` CLI on this host.
+- **Base image**: Fedora 44 — base for the sandbox image.
+- **Network**: Running sandbox must have zero direct internet egress; inference via OpenShell gateway only.
+- **Supply chain**: govulncheck, gsd-core (+ all deps), and Claude Code CLI pinned to "latest as of 4 days before build" (rolling). Cooldown window default 4 days.
+- **Install methods**: Go and golangci-lint via RPM; govulncheck via `go install`; gsd-core + Claude Code via their package managers (npm).
+- **Reproducibility**: rebuild must be script-driven and repeatable.
+
+## Key Decisions
+
+<!-- Decisions that constrain future work. Add throughout project lifecycle. -->
+
+| Decision | Rationale | Outcome |
+|----------|-----------|---------|
+| Run as an OpenShell sandbox built from a Fedora 44 Dockerfile | "nvidia openshell" resolves to the installed OpenShell CLI, which builds from a Dockerfile/dir and runs as a sandbox | — Pending |
+| Inference brokered through the OpenShell gateway rather than allowlisting api.anthropic.com | Preserves true zero-egress for the sandbox while still letting Claude reach a model | — Pending |
+| Rolling cooldown (build date − 4 days), window configurable | Keeps a constant supply-chain cooldown gap across periodic rebuilds | — Pending |
+| Cooldown applies to govulncheck, gsd-core (+deps), and Claude Code CLI | Consistent supply-chain mitigation for network-installed components | — Pending |
+| claude-engineering-toolkit cloned at latest HEAD (no cooldown) | Operator maintains the fork, so it's trusted | — Pending |
+| Network needed at build time, zero egress enforced only at runtime | dnf/go/npm/git need network to build; policy enforces isolation when running | — Pending |
+
+## Evolution
+
+This document evolves at phase transitions and milestone boundaries.
+
+**After each phase transition** (via `/gsd-transition`):
+1. Requirements invalidated? → Move to Out of Scope with reason
+2. Requirements validated? → Move to Validated with phase reference
+3. New requirements emerged? → Add to Active
+4. Decisions to log? → Add to Key Decisions
+5. "What This Is" still accurate? → Update if drifted
+
+**After each milestone** (via `/gsd-complete-milestone`):
+1. Full review of all sections
+2. Core Value check — still the right priority?
+3. Audit Out of Scope — reasons still valid?
+4. Update Context with current state
+
+---
+*Last updated: 2026-06-13 after initialization*

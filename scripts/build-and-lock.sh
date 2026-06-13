@@ -199,6 +199,14 @@ jq -e '.cooldown_date and .build_date and .packages.govulncheck.version and .pac
     "${PROJECT_ROOT}/versions.lock" > /dev/null
 
 echo "" >&2
+echo "=== Step 5: Verify pin-held guarantee (PIN-07) ===" >&2
+echo "INFO: Running verify-pins.sh against versions.lock + versions-npm.json..." >&2
+
+bash "${SCRIPT_DIR}/verify-pins.sh" \
+    --lock "${PROJECT_ROOT}/versions.lock" \
+    --npm-snapshot "${PROJECT_ROOT}/versions-npm.json"
+
+echo "" >&2
 echo "=== Build and Lock Complete ===" >&2
 echo "INFO: Image: ${IMAGE_TAG}" >&2
 echo "INFO: Cooldown date: ${COOLDOWN_DATE}" >&2

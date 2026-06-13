@@ -88,8 +88,8 @@ Podman mount schema for bind mounts:
 Verified from `inference-routing.mdx` in the OpenShell repo.
 
 **How it works:** Every sandbox has access to `https://inference.local` — a sandbox-local HTTPS endpoint managed by the OpenShell privacy router. The router:
-- Strips any `Authorization` / `ANTHROPIC_API_KEY` the sandbox provides (they are never forwarded)
-- Injects the real backend credentials from the configured provider record
+- Strips any `Authorization` / API-key header the sandbox provides (the in-sandbox placeholder is never forwarded)
+- Injects the real backend credential from the configured provider record (the `claude-code` subscription login)
 - Rewrites the model to the gateway-configured model
 - Forwards to the upstream Anthropic (or other) endpoint
 
@@ -103,7 +103,7 @@ claude --dangerously-skip-permissions --plugin-dir /toolkit
 
 **Critical URL note:** Claude Code appends `/v1/messages` to `ANTHROPIC_BASE_URL`. Set the URL to `https://inference.local` (without `/v1`). The full upstream path becomes `https://inference.local/v1/messages`, which matches the Anthropic-compatible pattern.
 
-**Why `ANTHROPIC_API_KEY=unused`:** The proxy strips it; this placeholder satisfies the SDK's requirement for a non-empty key value.
+**Why `ANTHROPIC_API_KEY=unused`:** This is a **dummy placeholder, not a credential.** Claude Code's SDK requires a non-empty key value whenever `ANTHROPIC_BASE_URL` is set; the gateway strips this placeholder and applies the real `claude-code` subscription credential upstream. Real authentication is the Claude subscription login held by the gateway — there is no API key. (Phase 3 confirms whether the supervisor's injected provider env removes the need for even this placeholder.)
 
 **`--bare` vs `--dangerously-skip-permissions`:** Use `--dangerously-skip-permissions` for elevated autonomous operation. `--bare` is mentioned in the OpenShell docs for skipping OAuth, but the project requirement is `--dangerously-skip-permissions`, not bare mode.
 
@@ -113,12 +113,15 @@ claude --dangerously-skip-permissions --plugin-dir /toolkit
 # Register local gateway (already done on this machine):
 openshell gateway add https://127.0.0.1:17670 --local --name openshell
 
-# Configure inference provider (Anthropic example):
-openshell provider create --name anthropic-prod --type anthropic --from-existing
-# ^ reads ANTHROPIC_API_KEY from host environment
+# Configure inference provider using the existing Claude subscription login:
+openshell provider create --name claude-code --type claude-code --from-existing
+# ^ loads the existing Claude Code subscription credential from host state
+#   (~/.claude/.credentials.json / macOS keychain) — NO api key involved.
+#   `openshell provider refresh` handles OAuth token refresh host-side.
+#   Exact --type/profile flag confirmed empirically in the inference phase.
 
 # Point inference.local at the provider:
-openshell inference set --provider anthropic-prod --model claude-opus-4-5
+openshell inference set --provider claude-code --model claude-opus-4-5
 ```
 
 ### Zero-Egress Policy

@@ -57,7 +57,7 @@ The complete, version-verified stack is: Fedora 44 base image (`docker.io/librar
 
 ### Architecture Approach
 
-The architecture separates concerns into two strict phases: build-time (unrestricted network; all packages downloaded and baked into the image) and runtime (zero direct egress; gateway brokers inference via gRPC mTLS). The `openshell-sandbox` supervisor process runs inside the container as a sidecar — it fetches an `InferenceBundle` from the gateway at startup, acts as a local L7 inference proxy for Claude Code, and injects the `ANTHROPIC_API_KEY` via `GetSandboxProviderEnvironment` RPC so the key never appears in the image. Claude Code's inference calls go to `localhost` (the supervisor), not to the internet.
+The architecture separates concerns into two strict phases: build-time (unrestricted network; all packages downloaded and baked into the image) and runtime (zero direct egress; gateway brokers inference via gRPC mTLS). The `openshell-sandbox` supervisor process runs inside the container as a sidecar — it fetches an `InferenceBundle` from the gateway at startup, acts as a local L7 inference proxy for Claude Code, and the gateway applies the `claude-code` subscription credential (loaded via `--from-existing`, **not** an API key) upstream — so the real credential never appears in the image. Claude Code's inference calls go to `localhost` (the supervisor), not to the internet.
 
 **Major components:**
 1. **Dockerfile** — defines the immutable image; all install steps run here; accepts cooldown version build args

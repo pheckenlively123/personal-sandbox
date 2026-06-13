@@ -40,7 +40,7 @@
 │  │  ┌─────────────────────────────────────────────────────┐  │   │
 │  │  │  openshell-sandbox (supervisor process)             │  │   │
 │  │  │  ─ fetches InferenceBundle from gateway (gRPC mTLS) │  │   │
-│  │  │  ─ fetches provider env (ANTHROPIC_API_KEY) via     │  │   │
+│  │  │  ─ fetches provider env (subscription cred) via     │  │   │
 │  │  │    GetSandboxProviderEnvironment RPC                 │  │   │
 │  │  │  ─ acts as local L7 inference proxy for Claude Code │  │   │
 │  │  │  ─ enforces Landlock + filesystem policy             │  │   │
@@ -51,7 +51,7 @@
 │  │  │  --dangerously-skip-permissions                     │  │   │
 │  │  │  --plugin-dir /opt/claude-engineering-toolkit       │  │   │
 │  │  │  ANTHROPIC_BASE_URL=<gateway-local-proxy>           │  │   │
-│  │  │  ANTHROPIC_API_KEY=<injected by supervisor>         │  │   │
+│  │  │  ANTHROPIC_API_KEY=unused (dummy; stripped)         │  │   │
 │  │  └─────────────────────────────────────────────────────┘  │   │
 │  │                                                           │   │
 │  │  /home/sandbox/claudeshared  ← bind mount (rw)           │   │
@@ -69,7 +69,7 @@
 ┌──────────────────────────────────────────────────────────────────┐
 │  HOST — OpenShell Gateway  (https://127.0.0.1:17670)            │
 │                                                                  │
-│  ─ Holds ANTHROPIC_API_KEY via attached provider                │
+│  ─ Holds subscription cred via attached provider                │
 │  ─ Holds inference route config (openshell inference set)        │
 │  ─ Proxies /v1/messages → api.anthropic.com on behalf of sandbox │
 │  ─ Enforces sandbox network policy (L7 allow/deny rules)         │
@@ -151,7 +151,7 @@ rebuild.sh
 
 ### Pattern 2: Gateway-Brokered Inference (the zero-egress inference path)
 
-**What:** The sandbox has no direct route to `api.anthropic.com`. Instead, the `openshell-sandbox` supervisor process inside the container fetches an `InferenceBundle` from the gateway over a gRPC mTLS channel. That bundle contains inference routes (provider type, `base_url`, model). The supervisor then acts as a local L7 proxy — it intercepts Claude Code's outbound inference requests and forwards them to the gateway, which proxies them to Anthropic on behalf of the sandbox. Provider credentials (`ANTHROPIC_API_KEY`) are injected into the sandbox environment via the `GetSandboxProviderEnvironment` RPC, not baked into the image.
+**What:** The sandbox has no direct route to `api.anthropic.com`. Instead, the `openshell-sandbox` supervisor process inside the container fetches an `InferenceBundle` from the gateway over a gRPC mTLS channel. That bundle contains inference routes (provider type, `base_url`, model). The supervisor then acts as a local L7 proxy — it intercepts Claude Code's outbound inference requests and forwards them to the gateway, which proxies them to Anthropic on behalf of the sandbox. The provider credential — the `claude-code` subscription login loaded with `--from-existing`, **not** an API key — is held by the gateway and applied upstream; any per-request placeholder from the sandbox is injected/handled via the `GetSandboxProviderEnvironment` RPC, never baked into the image.
 
 **When to use:** Required here. This is OpenShell's core security architecture for zero-egress sandboxes.
 
@@ -166,7 +166,7 @@ openshell-sandbox supervisor (L7 inference proxy, in-container)
     │  gRPC GetInferenceBundle / route request
     ▼
 openshell-gateway (host, 127.0.0.1:17670)
-    │  HTTPS with ANTHROPIC_API_KEY
+    │  HTTPS with the claude-code subscription credential
     ▼
 api.anthropic.com
 ```
@@ -237,13 +237,13 @@ rebuild.sh (host)
         │ POST /v1/messages → localhost:<supervisor-proxy-port>
         ▼
 [openshell-sandbox supervisor]
-    ── fetched InferenceBundle at startup: knows route for anthropic provider
+    ── fetched InferenceBundle at startup: knows route for claude-code provider
     ── intercepts the request (L7 proxy)
     ── calls gateway gRPC: relay inference request
         │ gRPC mTLS (over agent_socket / TLS tunnel)
         ▼
 [openshell-gateway on host, 127.0.0.1:17670]
-    ── holds ANTHROPIC_API_KEY (via registered provider, never in image)
+    ── holds the claude-code subscription cred (via registered provider, never in image)
     ── makes outbound HTTPS to api.anthropic.com/v1/messages
     ── returns response back through gRPC channel
         │
@@ -274,19 +274,19 @@ Claude Code reads/writes repos here under --dangerously-skip-permissions
 
 ```
 Operator (one-time setup, outside rebuild.sh):
-    openshell provider create --name anthropic-provider \
-        --type anthropic \
-        --credential ANTHROPIC_API_KEY=<key>
-    openshell inference set --provider anthropic-provider --model claude-opus-4-5
+    openshell provider create --name claude-code \
+        --type claude-code \
+        --from-existing          # loads the existing Claude subscription login (no API key)
+    openshell inference set --provider claude-code --model claude-opus-4-5
+    # `openshell provider refresh` keeps the subscription token fresh host-side.
 
 At sandbox create time:
-    --provider anthropic-provider  →  gateway attaches provider to sandbox
+    --provider claude-code  →  gateway attaches provider to sandbox
 
 At sandbox startup (inside container):
     openshell-sandbox supervisor calls GetSandboxProviderEnvironment RPC
-    gateway returns: {ANTHROPIC_API_KEY: "<key>", ...}
-    supervisor injects into Claude Code's process environment
-    (key is never in the image, never in the Dockerfile, never in versions.lock)
+    gateway supplies the subscription credential upstream; sandbox uses only a placeholder
+    (the real credential is never in the image, never in the Dockerfile, never in versions.lock)
 ```
 
 ---
@@ -386,9 +386,9 @@ The dependency graph between components determines this ordering:
 
 ## Anti-Patterns
 
-### Anti-Pattern 1: Baking ANTHROPIC_API_KEY into the Dockerfile
+### Anti-Pattern 1: Baking credentials into the Dockerfile
 
-**What people do:** `ENV ANTHROPIC_API_KEY=sk-ant-...` or `ARG ANTHROPIC_API_KEY` in the Dockerfile.
+**What people do:** Hardcode auth into the image — e.g. an `ENV`/`ARG` key, or copying the host's `~/.claude/.credentials.json` subscription login into the build.
 
 **Why it's wrong:** The key ends up in the image layers, is visible in `podman history`, and is leaked if the image is ever pushed or inspected. OpenShell's provider mechanism exists specifically to avoid this.
 

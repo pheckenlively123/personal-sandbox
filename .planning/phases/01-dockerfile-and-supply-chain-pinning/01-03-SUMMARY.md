@@ -119,6 +119,19 @@ None — no external service configuration required.
 - Phase 1 supply-chain pinning pipeline is complete with all BLOCKER and WARNING findings closed
 - Phase 2 (sandbox lifecycle: `openshell sandbox create`, bind mount, entry point) can proceed
 
+## Self-Check: PASSED
+
+| Check | Result |
+|-------|--------|
+| scripts/verify-pins.sh exists | FOUND |
+| scripts/resolve-versions.sh exists | FOUND |
+| scripts/build-and-lock.sh exists | FOUND |
+| tests/test-pin-held.sh exists | FOUND |
+| Dockerfile exists | FOUND |
+| 01-03-SUMMARY.md exists | FOUND |
+| Task 1 commit 47b6526 | FOUND |
+| Task 2 commit 1fbf814 | FOUND |
+
 ---
 *Phase: 01-dockerfile-and-supply-chain-pinning*
 *Completed: 2026-06-14*

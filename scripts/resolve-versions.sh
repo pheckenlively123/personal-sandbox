@@ -15,7 +15,7 @@
 #   GSD_CORE_VERSION=X.Y.Z
 #   CLAUDE_CODE_VERSION=X.Y.Z
 #
-# All diagnostics go to stderr so `eval $(...)` stays clean.
+# All diagnostics go to stderr so stdout stays clean for KEY=VALUE parsing.
 # Exits non-zero on bad input or registry failure.
 
 set -euo pipefail
@@ -65,9 +65,28 @@ fi
 
 echo "INFO: Resolving versions for cooldown date: ${COOLDOWN_DATE} (--cooldown-days ${COOLDOWN_DAYS})" >&2
 
-# Inclusive end-of-day cutoff per RESEARCH Pitfall 2:
-# "latest as of COOLDOWN_DATE" means on or before end-of-day UTC (T23:59:59Z)
-CUTOFF="${COOLDOWN_DATE}T23:59:59Z"
+# CR-01 fix: use an EXCLUSIVE next-day-midnight bound (CUTOFF_EXCL) instead of
+# the second-precision T23:59:59Z string.
+# Semantics: "latest as of COOLDOWN_DATE" = published strictly before next-day midnight UTC.
+# This correctly handles millisecond-precision npm timestamps: no T23:59:59.NNNZ value
+# reaches T00:00:00.000Z of the next day, while every next-day timestamp does.
+# CUTOFF (display) kept for log messages; CUTOFF_EXCL is the comparison operand.
+CUTOFF="${COOLDOWN_DATE}T23:59:59Z"  # human-readable display only — NOT used for comparison
+NEXT_DAY=$(python3 -c "
+from datetime import date, timedelta
+import re
+m = re.match(r'^([0-9]{4})-([0-9]{2})-([0-9]{2})$', '${COOLDOWN_DATE}')
+if not m:
+    raise SystemExit('ERROR: COOLDOWN_DATE format invalid')
+d = date(int(m.group(1)), int(m.group(2)), int(m.group(3))) + timedelta(days=1)
+print(d.isoformat())
+")
+if [[ -z "${NEXT_DAY}" ]]; then
+    echo "ERROR: Could not compute next-day from COOLDOWN_DATE=${COOLDOWN_DATE}" >&2
+    exit 1
+fi
+CUTOFF_EXCL="${NEXT_DAY}T00:00:00.000Z"  # exclusive upper bound — the comparison operand
+echo "INFO: CUTOFF_EXCL (exclusive next-day midnight): ${CUTOFF_EXCL}" >&2
 
 # --- Resolve govulncheck from Go proxy ---
 echo "INFO: Querying proxy.golang.org for govulncheck versions..." >&2
@@ -81,9 +100,17 @@ fi
 GOVULNCHECK_VERSION=""
 GOVULNCHECK_PUBDATE=""
 
-# For each version tag, fetch .info to get publish time, find latest <= CUTOFF
+# For each version tag, fetch .info to get publish time, find latest before CUTOFF_EXCL.
+# CR-01 fix: compare against CUTOFF_EXCL (exclusive next-day midnight) not T23:59:59Z.
+# IN-02: restrict to release tags matching ^v[0-9]+\.[0-9]+\.[0-9]+$ to exclude
+# pseudo-versions and pre-releases from the govulncheck pin selection.
 while IFS= read -r TAG; do
     [[ -z "$TAG" ]] && continue
+    # IN-02: skip pseudo-versions and pre-release tags; only accept release form vX.Y.Z
+    if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "INFO: Skipping non-release govulncheck tag: ${TAG}" >&2
+        continue
+    fi
     INFO=$(curl -sf "https://proxy.golang.org/golang.org/x/vuln/@v/${TAG}.info" 2>/dev/null || true)
     if [[ -z "$INFO" ]]; then
         echo "WARNING: Could not fetch info for govulncheck ${TAG}" >&2
@@ -94,10 +121,10 @@ while IFS= read -r TAG; do
         echo "WARNING: No .Time in info for govulncheck ${TAG}" >&2
         continue
     fi
-    # Lexicographic ISO-8601 comparison: PUB_TIME <= CUTOFF
-    # Note: [[ <= ]] is not a valid bash string operator; use < and == combined
-    if [[ "$PUB_TIME" < "$CUTOFF" ]] || [[ "$PUB_TIME" == "$CUTOFF" ]]; then
-        # Track latest (tags are generally in order but we pick latest PUB_TIME)
+    # CR-01 fix: a tag is eligible when its publish time is strictly before CUTOFF_EXCL
+    # (i.e. published on or before the inclusive cutoff day, any millisecond precision).
+    if [[ "$PUB_TIME" < "$CUTOFF_EXCL" ]]; then
+        # Track latest eligible (pick the one with the most recent PUB_TIME)
         if [[ -z "$GOVULNCHECK_PUBDATE" ]] || [[ "$PUB_TIME" > "$GOVULNCHECK_PUBDATE" ]]; then
             GOVULNCHECK_VERSION="$TAG"
             GOVULNCHECK_PUBDATE="$PUB_TIME"
@@ -120,11 +147,12 @@ if [[ -z "$GSD_CORE_DOC" ]]; then
     exit 1
 fi
 
-# jq pattern from RESEARCH Pattern 2: find latest version with .time[version] <= CUTOFF
-# Filter out "created" and "modified" metadata keys, compare timestamps
+# CR-01 fix: use CUTOFF_EXCL (exclusive next-day midnight) instead of .value <= $cutoff.
+# jq string comparison is lexicographic; .value < $cutoff_excl correctly captures any
+# millisecond-precision timestamp on the cutoff day while excluding the next day and later.
 GSD_CORE_VERSION=$(echo "$GSD_CORE_DOC" | jq -r \
-    --arg cutoff "$CUTOFF" \
-    '.time | to_entries | map(select(.key != "created" and .key != "modified" and (.value <= $cutoff))) | sort_by(.value) | last | .key' \
+    --arg cutoff_excl "$CUTOFF_EXCL" \
+    '.time | to_entries | map(select(.key != "created" and .key != "modified" and (.value < $cutoff_excl))) | sort_by(.value) | last | .key' \
     2>/dev/null || true)
 
 if [[ -z "$GSD_CORE_VERSION" ]] || [[ "$GSD_CORE_VERSION" == "null" ]]; then
@@ -144,9 +172,10 @@ if [[ -z "$CLAUDE_CODE_DOC" ]]; then
     exit 1
 fi
 
+# CR-01 fix: same CUTOFF_EXCL exclusive bound as above.
 CLAUDE_CODE_VERSION=$(echo "$CLAUDE_CODE_DOC" | jq -r \
-    --arg cutoff "$CUTOFF" \
-    '.time | to_entries | map(select(.key != "created" and .key != "modified" and (.value <= $cutoff))) | sort_by(.value) | last | .key' \
+    --arg cutoff_excl "$CUTOFF_EXCL" \
+    '.time | to_entries | map(select(.key != "created" and .key != "modified" and (.value < $cutoff_excl))) | sort_by(.value) | last | .key' \
     2>/dev/null || true)
 
 if [[ -z "$CLAUDE_CODE_VERSION" ]] || [[ "$CLAUDE_CODE_VERSION" == "null" ]]; then

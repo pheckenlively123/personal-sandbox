@@ -3,7 +3,13 @@
 #
 # Reads versions.lock + versions-npm.json, re-queries each package's true publish
 # date from its registry, and exits 1 (fails closed) if any date postdates the
-# inclusive cooldown cutoff (COOLDOWN_DATE + T23:59:59Z).
+# inclusive cooldown cutoff (whole cutoff day, inclusive).
+#
+# Cutoff semantics: a package published any time on COOLDOWN_DATE is allowed;
+# anything on COOLDOWN_DATE+1 or later is a violation. The exclusive upper bound
+# CUTOFF_EXCL = "${NEXT_DAY}T00:00:00.000Z" (next-day midnight UTC) is compared
+# as a lexicographic string — safe at full millisecond precision because no
+# T23:59:59.NNNZ value reaches next-day midnight (CR-01 fix).
 #
 # Fail-closed posture (D-03): missing input files, malformed JSON, or registry
 # query failures all exit non-zero — the verifier NEVER exits 0 on uncertainty.
@@ -80,21 +86,45 @@ if ! jq empty "${NPM_SNAPSHOT}" 2>/dev/null; then
     exit 1
 fi
 
-# --- Read cooldown date and form inclusive cutoff ---
+# --- Read cooldown date and form boundary-correct cutoff ---
 COOLDOWN_DATE=$(jq -r '.cooldown_date // empty' "${LOCK_FILE}")
 if [[ -z "${COOLDOWN_DATE}" ]]; then
     echo "FAIL: versions.lock missing cooldown_date field" >&2
     exit 1
 fi
 
-CUTOFF="${COOLDOWN_DATE}T23:59:59Z"
-echo "INFO: Cooldown cutoff: ${CUTOFF}" >&2
+# CR-01 fix: use an EXCLUSIVE next-day-midnight bound instead of T23:59:59Z.
+# A package is compliant iff its publish timestamp is strictly before CUTOFF_EXCL.
+# This correctly handles millisecond-precision npm timestamps — no T23:59:59.NNNZ
+# value reaches next-day midnight, while every next-day timestamp does.
+# CUTOFF (display only) is kept for log messages; CUTOFF_EXCL drives the comparison.
+CUTOFF="${COOLDOWN_DATE}T23:59:59Z"  # human-readable display only — NOT used for comparison
+NEXT_DAY=$(python3 -c "
+from datetime import date, timedelta
+import re
+m = re.match(r'^([0-9]{4})-([0-9]{2})-([0-9]{2})$', '${COOLDOWN_DATE}')
+if not m:
+    raise SystemExit('ERROR: COOLDOWN_DATE format invalid')
+d = date(int(m.group(1)), int(m.group(2)), int(m.group(3))) + timedelta(days=1)
+print(d.isoformat())
+")
+if [[ -z "${NEXT_DAY}" ]]; then
+    echo "FAIL: Could not compute next-day from COOLDOWN_DATE=${COOLDOWN_DATE}" >&2
+    exit 1
+fi
+CUTOFF_EXCL="${NEXT_DAY}T00:00:00.000Z"  # exclusive upper bound — the comparison operand
+
+echo "INFO: Cooldown date (inclusive): ${COOLDOWN_DATE}" >&2
+echo "INFO: Cutoff display (inclusive end-of-day): ${CUTOFF}" >&2
+echo "INFO: CUTOFF_EXCL (exclusive next-day midnight, used for comparison): ${CUTOFF_EXCL}" >&2
 
 VIOLATIONS=0
 CHECKED=0
 
 # --- Helper: check a publish date against the cutoff ---
-# Returns 0 if clean, increments VIOLATIONS if not
+# A date is a violation when it is >= CUTOFF_EXCL (i.e. on the next day or later).
+# Comparison is lexicographic against the full-precision CUTOFF_EXCL string — safe
+# because no T23:59:59.NNNZ value sorts at or above T00:00:00.000Z of the next day (CR-01).
 check_date() {
     local pkg="$1"
     local ver="$2"
@@ -106,9 +136,9 @@ check_date() {
         return
     fi
 
-    # ISO-8601 lexicographic comparison: if pub_date > CUTOFF, it violates
-    if [[ "${pub_date}" > "${CUTOFF}" ]]; then
-        echo "FAIL: ${pkg} ${ver} published ${pub_date} > cutoff ${CUTOFF}" >&2
+    # Violation: publish date is on the next day or later (>= exclusive next-day midnight)
+    if [[ "${pub_date}" > "${CUTOFF_EXCL}" ]] || [[ "${pub_date}" == "${CUTOFF_EXCL}" ]]; then
+        echo "FAIL: ${pkg} ${ver} published ${pub_date} >= CUTOFF_EXCL ${CUTOFF_EXCL} (postdates cooldown ${COOLDOWN_DATE})" >&2
         VIOLATIONS=$(( VIOLATIONS + 1 ))
     fi
     CHECKED=$(( CHECKED + 1 ))
@@ -230,5 +260,5 @@ if [[ "${VIOLATIONS}" -gt 0 ]]; then
     exit 1
 fi
 
-echo "PASS: All pins verified — every package published on or before ${CUTOFF}" >&2
+echo "PASS: All pins verified — every package published on or before end of ${COOLDOWN_DATE} (cutoff ${CUTOFF})" >&2
 exit 0

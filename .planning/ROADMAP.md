@@ -58,7 +58,15 @@
   4. A file created inside the sandbox at `~/claudeshared/canary.txt` appears on the host at the correct path and is owned by the macOS host user (confirming UID alignment)
   5. The rebuild script hands the podman-built image reference to `openshell sandbox create --from <image-ref>` (not `--from .`) and the sandbox enters the Ready state
 
-**Plans**: TBD
+**Plans:** 2 plans
+
+**Wave 1**
+
+- [ ] 02-01-PLAN.md — Image provenance slice: Dockerfile ARG BUILD_DATE + cooldown/build LABELs and build-and-lock.sh --build-date flag (BLD-03)
+
+**Wave 2** *(blocked on Wave 1)*
+
+- [ ] 02-02-PLAN.md — End-to-end rebuild.sh slice: preflight → build → :latest → idempotent teardown → sandbox create with bind mount + policy.yaml, plus --audit (BLD-01/02/04/05/06, RUN-03/04)
 
 ### Phase 3: Network Isolation and Inference Validation
 
@@ -96,7 +104,7 @@
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Dockerfile and Supply-Chain Pinning | 3/3 | Complete    | 2026-06-14 |
-| 2. Rebuild Script and Sandbox Lifecycle | 0/? | Not started | - |
+| 2. Rebuild Script and Sandbox Lifecycle | 0/2 | Planned | - |
 | 3. Network Isolation and Inference Validation | 0/? | Not started | - |
 | 4. Claude Code Launch and MCP Audit | 0/? | Not started | - |
 

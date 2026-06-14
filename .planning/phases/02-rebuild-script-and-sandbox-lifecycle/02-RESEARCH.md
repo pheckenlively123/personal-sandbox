@@ -707,22 +707,27 @@ No automated test framework applies to a bash script orchestration phase. The su
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+All three open questions were resolved during planning; the adopted decision is recorded inline below and reflected in the Phase 02 plans.
 
 1. **build-and-lock.sh extension interface for BUILD_DATE**
    - What we know: build-and-lock.sh must pass BUILD_DATE as --build-arg to podman build for D-04 LABEL approach.
    - What's unclear: Whether to use `--build-date` flag or `BUILD_DATE` env var convention.
    - Recommendation: Add `--build-date` flag to build-and-lock.sh (matches existing flag style). If BUILD_DATE is not passed, default to `$(python3 -c 'from datetime import date; print(date.today().isoformat())')`.
+   - **RESOLVED:** Adopt the `--build-date` flag (matches the existing `--cooldown-days`/`--tag` flag style). Implemented in Plan 02-01 Task 2.
 
 2. **Sandbox create blocking behavior: does `-- /bin/true` return synchronously?**
    - What we know: docs say "keep sandbox alive after initial command exits"; `--no-keep` reverses this.
    - What's unclear: Whether `openshell sandbox create -- /bin/true` returns to the shell immediately when `/bin/true` exits, or whether it blocks until the sandbox is torn down.
    - Recommendation: Plan for the `-- /bin/true` pattern; if it blocks, fall back to launching the create in background and polling `openshell sandbox list --names | grep -q claude-sandbox`.
+   - **RESOLVED:** Adopt the `--no-tty -- /bin/true` create pattern (Pattern 3); it returns to the shell leaving the sandbox Ready. The background-create + `sandbox list --names` polling fallback is retained as the documented contingency (Assumption A1) if blocking is observed. Implemented in Plan 02-02 Task 2.
 
 3. **Old image removal: exact reference to rmi**
    - What we know: rebuild.sh must remove old `claude-sandbox:<prev-date>` images (D-01 full clean).
    - What's unclear: rebuild.sh doesn't know the previous date without reading it from `versions.lock` or listing podman images.
    - Recommendation: Use `podman images --filter reference='localhost/claude-sandbox:*' --format '{{.Repository}}:{{.Tag}}'` to enumerate all date-tagged images, rmi them all, then prune dangling.
+   - **RESOLVED:** Enumerate via `podman images --filter reference='localhost/claude-sandbox:*'`, `rmi` the enumerated tags, then prune dangling — bounded strictly to this project's repository (never `rmi -a`). Implemented in Plan 02-02 Task 2 (teardown), satisfying threat-model mitigation T-02-06.
 
 ---
 

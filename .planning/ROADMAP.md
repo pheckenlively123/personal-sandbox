@@ -9,7 +9,7 @@
 
 ## Phases
 
-- [ ] **Phase 1: Dockerfile and Supply-Chain Pinning** - Working image that installs all tooling with rolling cooldown pinning (verification gaps found — PIN-07 gap closure pending)
+- [x] **Phase 1: Dockerfile and Supply-Chain Pinning** - Working image that installs all tooling with rolling cooldown pinning (verification gaps found — PIN-07 gap closure pending) (completed 2026-06-14)
 - [ ] **Phase 2: Rebuild Script and Sandbox Lifecycle** - Idempotent rebuild.sh that builds the image and recreates the sandbox cleanly
 - [ ] **Phase 3: Network Isolation and Inference Validation** - Running sandbox with zero direct egress and working model inference via the gateway
 - [ ] **Phase 4: Claude Code Launch and MCP Audit** - Claude running autonomously inside the sandbox with toolkit plugins loaded and audited
@@ -30,7 +30,7 @@
   2. The build log shows no `CACHED` entry for the `dnf update -y` step when `COOLDOWN_DATE` changes between runs — confirming the cache-bust ARG is working
   3. `govulncheck --version` inside the built image shows a release date on or before the cooldown date (build date minus 4 days), never the current day's `@latest`
   4. A `versions.lock` file records the exact pinned versions of govulncheck, gsd-core, and Claude Code CLI with their cooldown-resolved timestamps
-  5. The build fails (exit non-zero) if any pinned package's publish date is after the cooldown date (PIN-07 pin-held verification)**Plans:** 3 plans (2 shipped + 1 gap closure)
+  5. The build fails (exit non-zero) if any pinned package's publish date is after the cooldown date (PIN-07 pin-held verification)**Plans:** 3/3 plans complete
 
 **Wave 1**
 
@@ -42,7 +42,7 @@
 
 **Wave 3** *(gap closure — blocked on Wave 2)*
 
-- [ ] 01-03-PLAN.md — Fix CR-01 boundary cutoff comparison (CUTOFF_EXCL) + WARNING hardening (eval allowlist, npm-ls guard, missing-dep surfacing)
+- [x] 01-03-PLAN.md — Fix CR-01 boundary cutoff comparison (CUTOFF_EXCL) + WARNING hardening (eval allowlist, npm-ls guard, missing-dep surfacing)
 
 ### Phase 2: Rebuild Script and Sandbox Lifecycle
 
@@ -95,7 +95,7 @@
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Dockerfile and Supply-Chain Pinning | 2/3 | Gap closure | - |
+| 1. Dockerfile and Supply-Chain Pinning | 3/3 | Complete   | 2026-06-14 |
 | 2. Rebuild Script and Sandbox Lifecycle | 0/? | Not started | - |
 | 3. Network Isolation and Inference Validation | 0/? | Not started | - |
 | 4. Claude Code Launch and MCP Audit | 0/? | Not started | - |

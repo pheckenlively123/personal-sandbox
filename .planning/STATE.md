@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase 1 verification — gaps found (PIN-07 fail-open); gap closure pending
-last_updated: "2026-06-14T00:00:00.000Z"
+status: Ready to execute
+last_updated: "2026-06-14T17:34:41.029Z"
 progress:
   total_phases: 4
-  completed_phases: 0
-  total_plans: 2
-  completed_plans: 2
-  percent: 0
+  completed_phases: 1
+  total_plans: 3
+  completed_plans: 3
+  percent: 25
 ---
 
 # Project State: Claude Sandbox (Fedora 44 / OpenShell)
@@ -27,7 +27,7 @@ progress:
 ## Current Position
 
 Phase: 01 (dockerfile-and-supply-chain-pinning) — EXECUTING
-Plan: 2 of 2
+Plan: 2 of 3
 **Phase**: 1 — Dockerfile and Supply-Chain Pinning
 **Plan**: None started
 **Status**: Not started
@@ -64,6 +64,7 @@ Plan: 2 of 2
 | RUN-01/RUN-02 (Claude launch flags) in Phase 4 | Roadmap | MCP audit only meaningful after zero-egress confirmed (Phase 3); blocked plugins look like policy failures otherwise |
 | Phase 01 P01 | 427 | 3 tasks | 5 files |
 | Phase 01 P02 | 254 | 2 tasks | 4 files |
+| Phase 01-dockerfile-and-supply-chain-pinning P03 | 7min | 2 tasks | 5 files |
 
 ### Open Questions / Risks
 
@@ -96,3 +97,4 @@ Plan: 2 of 2
 
 - [Phase ?]: re-query not cached dates
 - [Phase ?]: associative array cache
+- [Phase ?]: CUTOFF_EXCL exclusive next-day-midnight bound replaces T23:59:59Z for all publish-date comparisons in verifier and resolver (CR-01 fix)

@@ -51,7 +51,13 @@ RUN git clone https://github.com/pheckenlWork/claude-engineering-toolkit.git \
 # Extracted host-side via `podman create` + `podman cp` by build-and-lock.sh.
 # --depth=Infinity captures transitive deps (Pitfall 3).
 # Do NOT add PIN-07 gate here — that is a host-side post-build step (D-03, D-04).
-RUN npm ls -g --json --depth=Infinity > /versions-npm.json && \
+#
+# WR-01 fix: npm ls exits non-zero whenever the global tree has extraneous, missing,
+# invalid, or unmet-peer deps — even when it still emits valid JSON. Guard with || true
+# so JSON is always captured. Then validate with `jq empty` before continuing (fail
+# closed on malformed JSON). govulncheck snapshot is written after successful validation.
+RUN { npm ls -g --json --depth=Infinity > /versions-npm.json || true; } && \
+    jq empty /versions-npm.json && \
     govulncheck --version > /versions-govulncheck.txt
 
 # Runtime entry point: Claude Code with dangerously-skip-permissions and plugin dir.

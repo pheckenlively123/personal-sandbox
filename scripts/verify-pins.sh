@@ -207,12 +207,19 @@ echo "=== Verifying transitive npm deps (D-04 coverage) ===" >&2
 #
 # versions-npm.json is a nested tree from `npm ls -g --json --depth=Infinity`.
 # We flatten it recursively to get all {pkg, ver} pairs.
+#
+# WR-02 fix: nodes marked missing/invalid by npm lack a version field and were
+# previously silently dropped (empty end). Now they emit a __MISSING__ sentinel
+# so the verifier loop can count them as violations (fail-closed on unresolved deps).
+# Structural nodes that are genuinely neither missing nor invalid are still skipped.
 TRANSITIVE_PAIRS=$(jq -r '
   def allpkgs:
     to_entries[] |
     .key as $pkg |
     .value |
-    (if has("version") then "\($pkg)\t\(.version)" else empty end),
+    (if has("version") then "\($pkg)\t\(.version)"
+     elif (.missing == true or .invalid == true) then "\($pkg)\t__MISSING__"
+     else empty end),
     (if has("dependencies") then (.dependencies | allpkgs) else empty end);
   .dependencies | allpkgs
 ' "${NPM_SNAPSHOT}" | sort -u)
@@ -229,6 +236,15 @@ TRANSITIVE_COUNT=0
 while IFS=$'\t' read -r PKG VER; do
     # Skip empty lines
     [[ -z "${PKG}" || -z "${VER}" ]] && continue
+
+    # WR-02: handle __MISSING__ sentinel — an unresolved/missing transitive dep
+    # is a fail-closed violation (npm could not pin this dep at all)
+    if [[ "${VER}" == "__MISSING__" ]]; then
+        echo "FAIL: ${PKG} unresolved/missing dependency (no pinned version — npm ls marked it missing or invalid)" >&2
+        VIOLATIONS=$(( VIOLATIONS + 1 ))
+        TRANSITIVE_COUNT=$(( TRANSITIVE_COUNT + 1 ))
+        continue
+    fi
 
     echo "INFO: Checking transitive ${PKG}@${VER}..." >&2
 

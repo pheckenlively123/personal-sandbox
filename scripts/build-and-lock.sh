@@ -56,23 +56,57 @@ done
 echo "=== Step 1: Resolve cooldown versions ===" >&2
 echo "INFO: Running resolve-versions.sh --cooldown-days ${COOLDOWN_DAYS}" >&2
 
-# Eval the resolver output to load version env vars into this shell.
-# All diagnostics from the resolver go to stderr; stdout is the KEY=VALUE pairs.
-# shellcheck disable=SC1090
-eval "$(bash "${SCRIPT_DIR}/resolve-versions.sh" --cooldown-days "${COOLDOWN_DAYS}")"
+# CR-02 fix: parse resolver KEY=VALUE output through an allowlist instead of eval.
+# The resolver emits KEY=VALUE pairs whose values come from npm/Go registry responses.
+# eval of registry-controlled output is a code-injection risk (T-01-11).
+# Validation rules:
+#   COOLDOWN_DATE  — must match YYYY-MM-DD (date format)
+#   *_VERSION      — must match ^v?[0-9][0-9A-Za-z._-]*$ (semver or vX.Y.Z form)
+# Unknown keys are rejected. Valid pairs are assigned via printf -v (no eval).
+COOLDOWN_DATE=""
+GOVULNCHECK_VERSION=""
+GSD_CORE_VERSION=""
+CLAUDE_CODE_VERSION=""
 
-echo "INFO: COOLDOWN_DATE=${COOLDOWN_DATE}" >&2
-echo "INFO: GOVULNCHECK_VERSION=${GOVULNCHECK_VERSION}" >&2
-echo "INFO: GSD_CORE_VERSION=${GSD_CORE_VERSION}" >&2
-echo "INFO: CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}" >&2
+while IFS='=' read -r key val; do
+    # Skip blank lines and comment lines
+    [[ -z "${key}" ]] && continue
+    [[ "${key}" == \#* ]] && continue
+    case "${key}" in
+        COOLDOWN_DATE)
+            if ! [[ "${val}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+                echo "ERROR: Resolver emitted invalid COOLDOWN_DATE value: '${val}'" >&2
+                exit 1
+            fi
+            printf -v COOLDOWN_DATE '%s' "${val}"
+            ;;
+        GOVULNCHECK_VERSION|GSD_CORE_VERSION|CLAUDE_CODE_VERSION)
+            if ! [[ "${val}" =~ ^v?[0-9][0-9A-Za-z._-]*$ ]]; then
+                echo "ERROR: Resolver emitted invalid ${key} value: '${val}'" >&2
+                exit 1
+            fi
+            printf -v "${key}" '%s' "${val}"
+            ;;
+        *)
+            echo "ERROR: Resolver emitted unrecognised key: '${key}'" >&2
+            exit 1
+            ;;
+    esac
+done < <(bash "${SCRIPT_DIR}/resolve-versions.sh" --cooldown-days "${COOLDOWN_DAYS}")
 
-# Validate resolved variables are non-empty
+# IN-01 fix: validate non-empty BEFORE logging, so set -u cannot abort with an
+# unbound-variable error before the friendly validation message fires.
 for VAR in COOLDOWN_DATE GOVULNCHECK_VERSION GSD_CORE_VERSION CLAUDE_CODE_VERSION; do
     if [[ -z "${!VAR:-}" ]]; then
         echo "ERROR: Resolver did not emit ${VAR}" >&2
         exit 1
     fi
 done
+
+echo "INFO: COOLDOWN_DATE=${COOLDOWN_DATE}" >&2
+echo "INFO: GOVULNCHECK_VERSION=${GOVULNCHECK_VERSION}" >&2
+echo "INFO: GSD_CORE_VERSION=${GSD_CORE_VERSION}" >&2
+echo "INFO: CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}" >&2
 
 echo "" >&2
 echo "=== Step 2: Build container image ===" >&2

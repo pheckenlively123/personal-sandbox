@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase complete — ready for verification
-last_updated: "2026-06-13T23:05:57.170Z"
+status: Phase 1 verification — gaps found (PIN-07 fail-open); gap closure pending
+last_updated: "2026-06-14T00:00:00.000Z"
 progress:
   total_phases: 4
-  completed_phases: 1
+  completed_phases: 0
   total_plans: 2
   completed_plans: 2
-  percent: 25
+  percent: 0
 ---
 
 # Project State: Claude Sandbox (Fedora 44 / OpenShell)

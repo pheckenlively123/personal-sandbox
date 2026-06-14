@@ -9,7 +9,7 @@
 
 ## Phases
 
-- [x] **Phase 1: Dockerfile and Supply-Chain Pinning** - Working image that installs all tooling with rolling cooldown pinning (completed 2026-06-13)
+- [ ] **Phase 1: Dockerfile and Supply-Chain Pinning** - Working image that installs all tooling with rolling cooldown pinning (verification gaps found — PIN-07 gap closure pending)
 - [ ] **Phase 2: Rebuild Script and Sandbox Lifecycle** - Idempotent rebuild.sh that builds the image and recreates the sandbox cleanly
 - [ ] **Phase 3: Network Isolation and Inference Validation** - Running sandbox with zero direct egress and working model inference via the gateway
 - [ ] **Phase 4: Claude Code Launch and MCP Audit** - Claude running autonomously inside the sandbox with toolkit plugins loaded and audited

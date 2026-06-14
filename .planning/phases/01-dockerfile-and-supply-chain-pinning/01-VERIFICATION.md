@@ -1,7 +1,9 @@
 ---
 phase: 01-dockerfile-and-supply-chain-pinning
 verified: 2026-06-14T18:00:00Z
-status: human_needed
+status: verified
+human_verification_completed: 2026-06-14T20:00:00Z
+human_verification_via: 01-UAT.md (3/3 passed on podman 5.0.2 host, arm64)
 score: 5/5 must-haves verified
 overrides_applied: 0
 re_verification:
@@ -27,8 +29,17 @@ human_verification:
 
 **Phase Goal:** A `podman build` of the Dockerfile succeeds and produces an image with all required tooling installed at cooldown-pinned versions, with a `versions.lock` artifact capturing exact resolved versions.
 **Verified:** 2026-06-14T18:00:00Z
-**Status:** human_needed
+**Status:** verified (human verification completed 2026-06-14T20:00:00Z via 01-UAT.md)
 **Re-verification:** Yes — after gap closure plan 01-03 (CR-01 BLOCKER + WARNING hardening)
+
+> **Human verification closed (2026-06-14):** All three `human_needed` items below were
+> executed on a podman-capable host (podman 5.0.2, arm64) and passed — recorded in
+> `01-UAT.md` (3/3 passed, 0 issues). The end-to-end build succeeded (resolver selected
+> gsd-core 1.5.0-rc.1, claude-code 2.1.172, govulncheck v1.3.0; final verify-pins.sh
+> exited 0 over 109 packages), `test-cache-bust.sh` confirmed a genuine dnf cache miss
+> on COOLDOWN_DATE change, and `govulncheck --version` inside the image reported
+> `govulncheck@v1.3.0`. One blocker found during UAT (jq missing from the image) was
+> fixed in commit bab05b7 and re-verified. The phase goal is fully achieved.
 
 ## Re-verification Summary
 

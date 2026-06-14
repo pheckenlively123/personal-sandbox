@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
-last_updated: "2026-06-14T17:34:41.029Z"
+status: Ready to plan
+last_updated: "2026-06-14T22:09:47.219Z"
 progress:
   total_phases: 4
   completed_phases: 1
@@ -20,36 +20,34 @@ progress:
 
 **Core Value**: Claude can run fully autonomous (`--dangerously-skip-permissions`) inside a sandbox that has zero direct network egress — all model inference is brokered through the OpenShell gateway — so elevated permissions can't be used to reach or exfiltrate to the open internet.
 
-**Current Focus**: Phase 1 — Dockerfile and Supply-Chain Pinning
+**Current Focus**: Phase 2 — Rebuild Script and Sandbox Lifecycle
 
 ---
 
 ## Current Position
 
-Phase: 01 (dockerfile-and-supply-chain-pinning) — EXECUTING
-Plan: 2 of 3
-**Phase**: 1 — Dockerfile and Supply-Chain Pinning
+**Phase**: 2 — Rebuild Script and Sandbox Lifecycle
 **Plan**: None started
-**Status**: Not started
+**Status**: Ready to plan
 
 **Overall Progress**:
 
 ```
 [Phase 1] [Phase 2] [Phase 3] [Phase 4]
-[  ....  ] [  ....  ] [  ....  ] [  ....  ]
-  0%          0%          0%          0%
+[ DONE ✓ ] [  ....  ] [  ....  ] [  ....  ]
+  100%        0%          0%          0%
 ```
 
-**Phase Progress**: 0 of 4 phases complete
+**Phase Progress**: 1 of 4 phases complete (25%)
 
 ---
 
 ## Performance Metrics
 
-**Plans executed**: 0
-**Plans succeeded first try**: 0
+**Plans executed**: 3
+**Plans succeeded first try**: 3
 **Repair cycles used**: 0
-**Phases complete**: 0 / 4
+**Phases complete**: 1 / 4
 
 ---
 
@@ -80,15 +78,17 @@ Plan: 2 of 3
 
 ### Blockers
 
-*(None — starting fresh)*
+*(None — Phase 1 shipped clean; the jq-missing build blocker was fixed and re-verified)*
 
 ---
 
 ## Session Continuity
 
-**Last updated**: 2026-06-13 (roadmap created)
-**Last action**: Roadmap and STATE.md written; REQUIREMENTS.md traceability updated
-**Next action**: Begin Phase 1 planning with `/gsd-plan-phase 1`
+**Last updated**: 2026-06-14 (Phase 1 verified, secured, and marked complete)
+**Last action**: Phase 1 UAT accepted (3/3 passed), SECURITY.md written (threats_open: 0), VERIFICATION.md human items closed; phase marked complete in ROADMAP.md and STATE.md
+**Next action**: Begin Phase 2 with `/gsd-discuss-phase 2` (or plan directly with `/gsd-plan-phase 2`)
+**Stopped at**: Phase 1 complete, ready to plan Phase 2
+**Resume file**: None
 
 ---
 *State initialized: 2026-06-13*

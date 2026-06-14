@@ -11,6 +11,7 @@ ARG CLAUDE_CODE_VERSION
 # Step 1: System packages — cache-busted by COOLDOWN_DATE ARG above.
 # golang and golangci-lint installed via RPM per CLAUDE.md (IMG-03, IMG-04).
 # nodejs, npm, git, ca-certificates required before npm installs (Pitfall 6).
+# jq required by the in-image npm-ls snapshot validation step (`jq empty`, WR-01).
 RUN dnf update -y && \
     dnf install -y \
         golang \
@@ -18,6 +19,7 @@ RUN dnf update -y && \
         nodejs \
         npm \
         git \
+        jq \
         ca-certificates \
     && dnf clean all
 

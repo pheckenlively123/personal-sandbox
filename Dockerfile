@@ -72,6 +72,12 @@ RUN { npm ls -g --json --depth=Infinity > /versions-npm.json || true; } && \
     jq empty /versions-npm.json && \
     govulncheck --version > /versions-govulncheck.txt
 
+# Step 7b: Install iproute (provides /usr/sbin/ip), required by the OpenShell sandbox
+# supervisor to create the network namespace for its proxy/isolation mode. Without it the
+# container exits 1 with "trusted ip helper not found; checked /usr/sbin/ip ...". Late layer
+# (after the heavy installs) so it only rebuilds a thin trailing layer.
+RUN dnf install -y iproute && dnf clean all
+
 # Step 8: Create the 'sandbox' user and group required by the OpenShell sandbox supervisor.
 # The supervisor (/opt/openshell/bin/openshell-sandbox) de-escalates into a user named 'sandbox';
 # if the user or group is absent the container exits immediately with

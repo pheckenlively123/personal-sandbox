@@ -44,7 +44,7 @@ Requirements for the initial release. Each maps to a roadmap phase.
 
 - [ ] **BLD-01**: A single script rebuilds the sandbox on demand
 - [ ] **BLD-02**: Rebuild is idempotent — it tears down any existing sandbox/image and recreates cleanly
-- [ ] **BLD-03**: The image is tagged with the build date and records the cooldown date as an image label
+- [x] **BLD-03**: The image is tagged with the build date and records the cooldown date as an image label
 - [ ] **BLD-04**: The rebuild script emits timestamped log lines per phase (dnf update, npm install, go install, sandbox create)
 - [ ] **BLD-05**: The rebuild script surfaces a documented `openshell logs` egress-audit step for post-session review
 - [ ] **BLD-06**: The container image is built with **podman** (`podman build`), not the Docker daemon; the rebuild script hands the resulting image reference to `openshell sandbox create --from <image-ref>` (build-phase planning must confirm how OpenShell resolves a podman-built image, since podman and docker use separate local image stores)
@@ -105,7 +105,7 @@ Populated at roadmap creation. Each requirement maps to exactly one phase.
 | RUN-04 | Phase 2 | Pending |
 | BLD-01 | Phase 2 | Pending |
 | BLD-02 | Phase 2 | Pending |
-| BLD-03 | Phase 2 | Pending |
+| BLD-03 | Phase 2 | Complete |
 | BLD-04 | Phase 2 | Pending |
 | BLD-05 | Phase 2 | Pending |
 | BLD-06 | Phase 2 | Pending |

@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
-last_updated: "2026-06-14T22:59:48.397Z"
+status: Executing Phase 02
+last_updated: "2026-06-15T22:00:20.082Z"
 progress:
   total_phases: 4
   completed_phases: 1
-  total_plans: 3
+  total_plans: 5
   completed_plans: 3
   percent: 25
 ---
@@ -26,9 +26,11 @@ progress:
 
 ## Current Position
 
+Phase: 02 (rebuild-script-and-sandbox-lifecycle) — EXECUTING
+Plan: 1 of 2
 **Phase**: 2 — Rebuild Script and Sandbox Lifecycle
-**Plan**: None started
-**Status**: Ready to plan
+**Plan**: 02-01 — Executing (paused at Task 3: human-verify checkpoint)
+**Status**: Awaiting human verification of podman label round-trip (BLD-03)
 
 **Overall Progress**:
 
@@ -84,10 +86,10 @@ progress:
 
 ## Session Continuity
 
-**Last updated**: 2026-06-14 (Phase 1 verified, secured, and marked complete)
-**Last action**: Phase 1 UAT accepted (3/3 passed), SECURITY.md written (threats_open: 0), VERIFICATION.md human items closed; phase marked complete in ROADMAP.md and STATE.md
-**Next action**: Begin Phase 2 with `/gsd-discuss-phase 2` (or plan directly with `/gsd-plan-phase 2`)
-**Stopped at**: Phase 1 complete, ready to plan Phase 2
+**Last updated**: 2026-06-15 (Phase 2, Plan 1, Tasks 1-2 executed; paused at Task 3 human-verify)
+**Last action**: Tasks 1-2 committed (387269c, 88c0bc2) — Dockerfile ARG/LABEL and build-and-lock.sh --build-date flag
+**Next action**: Human runs podman build and verifies cooldown.date + build.date labels via podman inspect
+**Stopped at**: 02-01-PLAN.md Task 3 (human-verify checkpoint)
 **Resume file**: None
 
 ---
@@ -98,3 +100,5 @@ progress:
 - [Phase ?]: re-query not cached dates
 - [Phase ?]: associative array cache
 - [Phase ?]: CUTOFF_EXCL exclusive next-day-midnight bound replaces T23:59:59Z for all publish-date comparisons in verifier and resolver (CR-01 fix)
+- [Phase 02]: ARG BUILD_DATE + five LABEL lines added to Dockerfile via D-04 pattern (LABEL-via-ARG for portability — provenance travels with image regardless of build entry point)
+- [Phase 02]: build-and-lock.sh --build-date flag added with T-02-01 YYYY-MM-DD allowlist validation before podman build invocation

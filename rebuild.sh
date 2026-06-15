@@ -149,13 +149,21 @@ else
     log_info "Sandbox ${SANDBOX_NAME} deleted"
 fi
 
-# Remove all date-tagged claude-sandbox images (handles accumulation from prior runs)
+# Remove old date-tagged claude-sandbox images (handles accumulation from prior runs)
 # T-02-06: only target localhost/claude-sandbox:* — never rmi -a or untargeted prune
+# Skip the image just built this run so Step 4 can find it locally (D-01/D-02: idempotent
+# teardown of PRIOR images only; current build tags are preserved for sandbox create).
+KEEP_DATE="localhost/claude-sandbox:${BUILD_DATE}"
+KEEP_LATEST="localhost/claude-sandbox:latest"
 OLD_IMAGES=$(podman images --filter reference='localhost/claude-sandbox:*' \
     --format '{{.Repository}}:{{.Tag}}' 2>/dev/null || true)
 if [[ -n "${OLD_IMAGES}" ]]; then
     while IFS= read -r img; do
         [[ -z "${img}" ]] && continue
+        if [[ "${img}" == "${KEEP_DATE}" || "${img}" == "${KEEP_LATEST}" ]]; then
+            log_info "Keeping current build image: ${img}"
+            continue
+        fi
         log_info "Removing image: ${img}"
         podman rmi --force --ignore "${img}" >/dev/null 2>&1 || true
     done <<< "${OLD_IMAGES}"

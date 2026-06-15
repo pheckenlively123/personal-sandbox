@@ -1,0 +1,15 @@
+# policy.yaml — OpenShell sandbox Landlock filesystem policy
+# Source: OpenShell policies.mdx + policy-schema.mdx (verified official docs)
+#
+# This file is passed to `openshell sandbox create --policy ./policy.yaml`.
+# The auto-baseline (read-only: /usr /lib /etc; read-write: /sandbox /tmp) is
+# merged in automatically — only add paths beyond the baseline here.
+#
+# Egress policy (zero-egress enforcement) intentionally deferred to Phase 3.
+# Do not add a network section here.
+version: 1
+
+filesystem_policy:
+  include_workdir: true
+  read_write:
+    - /claudeshared

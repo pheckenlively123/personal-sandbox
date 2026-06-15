@@ -72,6 +72,16 @@ RUN { npm ls -g --json --depth=Infinity > /versions-npm.json || true; } && \
     jq empty /versions-npm.json && \
     govulncheck --version > /versions-govulncheck.txt
 
+# Step 8: Create the 'sandbox' user and group required by the OpenShell sandbox supervisor.
+# The supervisor (/opt/openshell/bin/openshell-sandbox) de-escalates into a user named 'sandbox';
+# if the user or group is absent the container exits immediately with
+# "sandbox user 'sandbox' not found in image". UID/GID 1000 is sufficient — the supervisor
+# only checks the name, and virtiofs maps container UIDs to the host user on macOS regardless
+# of the UID value (D-09). --no-log-init avoids a sparse /var/log/lastlog. No trailing
+# USER instruction: the supervisor runs as root and drops privileges itself.
+RUN groupadd -g 1000 sandbox \
+    && useradd -m -u 1000 -g sandbox -s /bin/bash --no-log-init sandbox
+
 # Runtime entry point: Claude Code with dangerously-skip-permissions and plugin dir.
 # ANTHROPIC_BASE_URL has no trailing /v1 (CLAUDE.md "What NOT to Use").
 ENV ANTHROPIC_BASE_URL=https://inference.local

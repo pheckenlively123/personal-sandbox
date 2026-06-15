@@ -14,13 +14,15 @@ Claude can run fully autonomous (`--dangerously-skip-permissions`) inside a sand
 
 <!-- Shipped and confirmed valuable. -->
 
-(None yet — ship to validate)
+- [x] Sandbox image is built with podman (`podman build`) from a Fedora 44 base, then run as an OpenShell sandbox (`openshell sandbox create --from <image-ref>`) — *Validated in Phase 2: rebuild.sh creates claude-sandbox from the podman-built `localhost/claude-sandbox:<date>` ref and it reaches Ready (BLD-06)*
+- [x] `~/claudeshared` mounted read-write into the sandbox for cloning and developing repos — *Validated in Phase 2: bind mount + policy.yaml; in-sandbox write to /claudeshared lands host-owned (RUN-03/RUN-04)*
+- [x] A script rebuilds the sandbox on demand (re-applies the rolling cooldown each run) — *Validated in Phase 2: idempotent `./rebuild.sh` runs cleanly twice (BLD-01/BLD-02)*
+- [x] Cooldown is a rolling window: each rebuild pins to "latest as of 4 days before build" — *Validated in Phases 1–2: build-and-lock.sh resolves the rolling cooldown, invoked fresh by each rebuild.sh run*
 
 ### Active
 
 <!-- Current scope. Building toward these. -->
 
-- [ ] Sandbox image is built with podman (`podman build`) from a Fedora 44 base, then run as an OpenShell sandbox (`openshell sandbox create --from <image-ref>`)
 - [ ] All RPM updates applied during build (`dnf update -y`)
 - [ ] Go toolchain installed via RPM (`golang`)
 - [ ] golangci-lint installed via RPM
@@ -30,10 +32,7 @@ Claude can run fully autonomous (`--dangerously-skip-permissions`) inside a sand
 - [ ] claude-engineering-toolkit fork cloned (`https://github.com/pheckenlWork/claude-engineering-toolkit.git`, default branch, latest HEAD)
 - [ ] Claude launched with `--plugin-dir` pointed at the cloned toolkit so its agents and skills are available
 - [ ] Claude launched with `--dangerously-skip-permissions`
-- [ ] Sandbox runtime has zero direct internet egress; model inference is brokered via the OpenShell gateway
-- [ ] `~/claudeshared` mounted read-write into the sandbox for cloning and developing repos
-- [ ] A script rebuilds the sandbox on demand (re-applies the rolling cooldown each run)
-- [ ] Cooldown is a rolling window: each rebuild pins to "latest as of 4 days before build"
+- [ ] Sandbox runtime has zero direct internet egress; model inference is brokered via the OpenShell gateway *(Phase 3)*
 
 ### Out of Scope
 
@@ -69,7 +68,7 @@ Claude can run fully autonomous (`--dangerously-skip-permissions`) inside a sand
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
 | Run as an OpenShell sandbox built from a Fedora 44 Dockerfile | "nvidia openshell" resolves to the installed OpenShell CLI, which builds from a Dockerfile/dir and runs as a sandbox | — Pending |
-| Build the image with podman, hand the image reference to `openshell sandbox create --from <image-ref>` | Operator prefers podman over the Docker daemon for image builds; OpenShell `--from` accepts a full image reference | — Pending (build phase must confirm OpenShell picks up the podman-built image across separate image stores) |
+| Build the image with podman, hand the image reference to `openshell sandbox create --from <image-ref>` | Operator prefers podman over the Docker daemon for image builds; OpenShell `--from` accepts a full image reference | ✓ Confirmed (Phase 2): OpenShell creates the sandbox from the podman-built `localhost/claude-sandbox:<date>` ref (image_pull_policy `missing` uses the local store). NOTE: OpenShell sandbox images MUST contain a `sandbox` user+group and `iproute`, and `--policy` OVERRIDES the built-in default (a custom policy must reproduce the full default + added paths) |
 | Inference brokered through the OpenShell gateway rather than allowlisting api.anthropic.com | Preserves true zero-egress for the sandbox while still letting Claude reach a model | — Pending |
 | Authenticate via the Claude subscription login (gateway `claude-code` provider, `--from-existing`) instead of an `ANTHROPIC_API_KEY` | Host is already logged in via subscription (no API key present); gateway holds/refreshes the credential host-side, so the zero-egress sandbox needs only a placeholder | — Pending (inference phase to confirm exact provider create/inference set flags) |
 | Rolling cooldown (build date − 4 days), window configurable | Keeps a constant supply-chain cooldown gap across periodic rebuilds | — Pending |
@@ -95,4 +94,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-13 after initialization*
+*Last updated: 2026-06-15 — Phase 2 complete (rebuild.sh + sandbox lifecycle)*

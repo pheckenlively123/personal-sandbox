@@ -104,7 +104,7 @@
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Dockerfile and Supply-Chain Pinning | 3/3 | Complete    | 2026-06-14 |
-| 2. Rebuild Script and Sandbox Lifecycle | 2/2 | Complete   | 2026-06-15 |
+| 2. Rebuild Script and Sandbox Lifecycle | 2/2 | Complete    | 2026-06-15 |
 | 3. Network Isolation and Inference Validation | 0/? | Not started | - |
 | 4. Claude Code Launch and MCP Audit | 0/? | Not started | - |
 

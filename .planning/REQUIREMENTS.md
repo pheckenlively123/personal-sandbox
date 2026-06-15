@@ -37,17 +37,17 @@ Requirements for the initial release. Each maps to a roadmap phase.
 
 - [ ] **RUN-01**: Claude is launched with `--dangerously-skip-permissions`
 - [ ] **RUN-02**: Claude is launched with `--plugin-dir` pointed at the cloned claude-engineering-toolkit so its agents and skills are loaded
-- [ ] **RUN-03**: `~/claudeshared` is bind-mounted into the sandbox with read-write access
-- [ ] **RUN-04**: The bind mount has correct UID/ownership alignment so Claude can read and write files that remain editable from the host
+- [x] **RUN-03**: `~/claudeshared` is bind-mounted into the sandbox with read-write access
+- [x] **RUN-04**: The bind mount has correct UID/ownership alignment so Claude can read and write files that remain editable from the host
 
 ### Rebuild Script & Lifecycle (BLD)
 
-- [ ] **BLD-01**: A single script rebuilds the sandbox on demand
-- [ ] **BLD-02**: Rebuild is idempotent — it tears down any existing sandbox/image and recreates cleanly
+- [x] **BLD-01**: A single script rebuilds the sandbox on demand
+- [x] **BLD-02**: Rebuild is idempotent — it tears down any existing sandbox/image and recreates cleanly
 - [x] **BLD-03**: The image is tagged with the build date and records the cooldown date as an image label
-- [ ] **BLD-04**: The rebuild script emits timestamped log lines per phase (dnf update, npm install, go install, sandbox create)
-- [ ] **BLD-05**: The rebuild script surfaces a documented `openshell logs` egress-audit step for post-session review
-- [ ] **BLD-06**: The container image is built with **podman** (`podman build`), not the Docker daemon; the rebuild script hands the resulting image reference to `openshell sandbox create --from <image-ref>` (build-phase planning must confirm how OpenShell resolves a podman-built image, since podman and docker use separate local image stores)
+- [x] **BLD-04**: The rebuild script emits timestamped log lines per phase (dnf update, npm install, go install, sandbox create)
+- [x] **BLD-05**: The rebuild script surfaces a documented `openshell logs` egress-audit step for post-session review
+- [x] **BLD-06**: The container image is built with **podman** (`podman build`), not the Docker daemon; the rebuild script hands the resulting image reference to `openshell sandbox create --from <image-ref>` (build-phase planning must confirm how OpenShell resolves a podman-built image, since podman and docker use separate local image stores)
 
 ## v2 Requirements
 
@@ -101,14 +101,14 @@ Populated at roadmap creation. Each requirement maps to exactly one phase.
 | NET-05 | Phase 3 | Pending |
 | RUN-01 | Phase 4 | Pending |
 | RUN-02 | Phase 4 | Pending |
-| RUN-03 | Phase 2 | Pending |
-| RUN-04 | Phase 2 | Pending |
-| BLD-01 | Phase 2 | Pending |
-| BLD-02 | Phase 2 | Pending |
+| RUN-03 | Phase 2 | Complete |
+| RUN-04 | Phase 2 | Complete |
+| BLD-01 | Phase 2 | Complete |
+| BLD-02 | Phase 2 | Complete |
 | BLD-03 | Phase 2 | Complete |
-| BLD-04 | Phase 2 | Pending |
-| BLD-05 | Phase 2 | Pending |
-| BLD-06 | Phase 2 | Pending |
+| BLD-04 | Phase 2 | Complete |
+| BLD-05 | Phase 2 | Complete |
+| BLD-06 | Phase 2 | Complete |
 
 **Coverage:**
 

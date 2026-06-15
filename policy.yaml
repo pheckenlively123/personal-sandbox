@@ -1,15 +1,40 @@
 # policy.yaml — OpenShell sandbox Landlock filesystem policy
-# Source: OpenShell policies.mdx + policy-schema.mdx (verified official docs)
+# Source: the live built-in default policy (`openshell policy get <sb> --full -o json`),
+# extended with /claudeshared.
 #
 # This file is passed to `openshell sandbox create --policy ./policy.yaml`.
-# The auto-baseline (read-only: /usr /lib /etc; read-write: /sandbox /tmp) is
-# merged in automatically — only add paths beyond the baseline here.
+# IMPORTANT: `--policy` OVERRIDES the built-in default policy entirely — it does NOT
+# merge with an auto-baseline (verified live: `sandbox create --policy` help says
+# "Overrides the built-in default"). Therefore this file must reproduce the full
+# default policy (filesystem read_only/read_write baseline, landlock compatibility,
+# and the process run-as user/group) and then add /claudeshared. Dropping the
+# baseline (as an earlier minimal version did) strips the filesystem grants the
+# OpenShell supervisor needs to set up its network namespace, causing the sandbox
+# to fail provisioning with "Permission denied (os error 13)".
 #
-# Egress policy (zero-egress enforcement) intentionally deferred to Phase 3.
+# Egress policy (zero-egress enforcement) is intentionally deferred to Phase 3.
 # Do not add a network section here.
 version: 1
 
 filesystem_policy:
   include_workdir: true
+  read_only:
+    - /usr
+    - /lib
+    - /proc
+    - /dev/urandom
+    - /app
+    - /etc
+    - /var/log
   read_write:
-    - /claudeshared
+    - /sandbox
+    - /tmp
+    - /dev/null
+    - /claudeshared   # Phase 2 addition (RUN-03/RUN-04): host bind mount, read-write
+
+landlock:
+  compatibility: best_effort
+
+process:
+  run_as_group: sandbox
+  run_as_user: sandbox

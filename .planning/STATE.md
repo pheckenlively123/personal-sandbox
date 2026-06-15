@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Executing Phase 02
-last_updated: "2026-06-15T22:00:20.082Z"
+status: Ready to execute
+last_updated: "2026-06-15T22:15:36.488Z"
 progress:
   total_phases: 4
   completed_phases: 1
   total_plans: 5
-  completed_plans: 3
+  completed_plans: 4
   percent: 25
 ---
 
@@ -27,10 +27,10 @@ progress:
 ## Current Position
 
 Phase: 02 (rebuild-script-and-sandbox-lifecycle) — EXECUTING
-Plan: 1 of 2
+Plan: 2 of 2
 **Phase**: 2 — Rebuild Script and Sandbox Lifecycle
-**Plan**: 02-01 — Executing (paused at Task 3: human-verify checkpoint)
-**Status**: Awaiting human verification of podman label round-trip (BLD-03)
+**Plan**: 02-02 — Ready to execute
+**Status**: 02-01 complete (BLD-03 satisfied); ready to start 02-02 (rebuild.sh end-to-end slice)
 
 **Overall Progress**:
 
@@ -65,6 +65,7 @@ Plan: 1 of 2
 | Phase 01 P01 | 427 | 3 tasks | 5 files |
 | Phase 01 P02 | 254 | 2 tasks | 4 files |
 | Phase 01-dockerfile-and-supply-chain-pinning P03 | 7min | 2 tasks | 5 files |
+| Phase 02 P01 | 20min | 3 tasks | 2 files |
 
 ### Open Questions / Risks
 
@@ -86,10 +87,10 @@ Plan: 1 of 2
 
 ## Session Continuity
 
-**Last updated**: 2026-06-15 (Phase 2, Plan 1, Tasks 1-2 executed; paused at Task 3 human-verify)
-**Last action**: Tasks 1-2 committed (387269c, 88c0bc2) — Dockerfile ARG/LABEL and build-and-lock.sh --build-date flag
-**Next action**: Human runs podman build and verifies cooldown.date + build.date labels via podman inspect
-**Stopped at**: 02-01-PLAN.md Task 3 (human-verify checkpoint)
+**Last updated**: 2026-06-15 (Phase 2, Plan 1 complete — BLD-03 satisfied)
+**Last action**: 02-01-SUMMARY.md committed (574c97a) — plan 01 fully complete; operator verified cooldown.date + build.date labels via podman inspect
+**Next action**: Execute 02-02-PLAN.md (rebuild.sh end-to-end slice)
+**Stopped at**: Completed 02-01-PLAN.md
 **Resume file**: None
 
 ---
@@ -102,3 +103,4 @@ Plan: 1 of 2
 - [Phase ?]: CUTOFF_EXCL exclusive next-day-midnight bound replaces T23:59:59Z for all publish-date comparisons in verifier and resolver (CR-01 fix)
 - [Phase 02]: ARG BUILD_DATE + five LABEL lines added to Dockerfile via D-04 pattern (LABEL-via-ARG for portability — provenance travels with image regardless of build entry point)
 - [Phase 02]: build-and-lock.sh --build-date flag added with T-02-01 YYYY-MM-DD allowlist validation before podman build invocation
+- [Phase ?]: [Phase 02]: T-02-01 mitigation — BUILD_DATE allowlist-validated against YYYY-MM-DD regex before podman build invocation; no eval

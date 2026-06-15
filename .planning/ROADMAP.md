@@ -10,7 +10,7 @@
 ## Phases
 
 - [x] **Phase 1: Dockerfile and Supply-Chain Pinning** - Working image that installs all tooling with rolling cooldown pinning (verification gaps found — PIN-07 gap closure pending) (completed 2026-06-14)
-- [ ] **Phase 2: Rebuild Script and Sandbox Lifecycle** - Idempotent rebuild.sh that builds the image and recreates the sandbox cleanly
+- [x] **Phase 2: Rebuild Script and Sandbox Lifecycle** - Idempotent rebuild.sh that builds the image and recreates the sandbox cleanly (completed 2026-06-15)
 - [ ] **Phase 3: Network Isolation and Inference Validation** - Running sandbox with zero direct egress and working model inference via the gateway
 - [ ] **Phase 4: Claude Code Launch and MCP Audit** - Claude running autonomously inside the sandbox with toolkit plugins loaded and audited
 
@@ -58,7 +58,7 @@
   4. A file created inside the sandbox at `~/claudeshared/canary.txt` appears on the host at the correct path and is owned by the macOS host user (confirming UID alignment)
   5. The rebuild script hands the podman-built image reference to `openshell sandbox create --from <image-ref>` (not `--from .`) and the sandbox enters the Ready state
 
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 **Wave 1**
 
@@ -66,7 +66,7 @@
 
 **Wave 2** *(blocked on Wave 1)*
 
-- [ ] 02-02-PLAN.md — End-to-end rebuild.sh slice: preflight → build → :latest → idempotent teardown → sandbox create with bind mount + policy.yaml, plus --audit (BLD-01/02/04/05/06, RUN-03/04)
+- [x] 02-02-PLAN.md — End-to-end rebuild.sh slice: preflight → build → :latest → idempotent teardown → sandbox create with bind mount + policy.yaml, plus --audit (BLD-01/02/04/05/06, RUN-03/04)
 
 ### Phase 3: Network Isolation and Inference Validation
 
@@ -104,7 +104,7 @@
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Dockerfile and Supply-Chain Pinning | 3/3 | Complete    | 2026-06-14 |
-| 2. Rebuild Script and Sandbox Lifecycle | 1/2 | In Progress|  |
+| 2. Rebuild Script and Sandbox Lifecycle | 2/2 | Complete   | 2026-06-15 |
 | 3. Network Isolation and Inference Validation | 0/? | Not started | - |
 | 4. Claude Code Launch and MCP Audit | 0/? | Not started | - |
 

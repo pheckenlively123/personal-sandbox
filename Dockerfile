@@ -7,6 +7,16 @@ ARG COOLDOWN_DATE
 ARG GOVULNCHECK_VERSION
 ARG GSD_CORE_VERSION
 ARG CLAUDE_CODE_VERSION
+ARG BUILD_DATE
+
+# Provenance labels (D-04): declared via ARG so values travel with the image regardless
+# of build entry point. LABELs do not trigger layer execution and do not invalidate the
+# COOLDOWN_DATE cache-bust anchor above.
+LABEL cooldown.date="${COOLDOWN_DATE}"
+LABEL build.date="${BUILD_DATE}"
+LABEL govulncheck.version="${GOVULNCHECK_VERSION}"
+LABEL gsd.core.version="${GSD_CORE_VERSION}"
+LABEL claude.code.version="${CLAUDE_CODE_VERSION}"
 
 # Step 1: System packages — cache-busted by COOLDOWN_DATE ARG above.
 # golang and golangci-lint installed via RPM per CLAUDE.md (IMG-03, IMG-04).

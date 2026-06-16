@@ -59,6 +59,55 @@ check_inference_provider() {
 }
 
 # ---------------------------------------------------------------------------
+# NET-04 live policy assertion (Step 5 / D-02)
+# ---------------------------------------------------------------------------
+# Query the live sandbox policy (not the static policy.yaml) and abort if any
+# direct Anthropic endpoint is present. jq -e exits 0 on match (VIOLATION),
+# non-zero on no match (PASS) — inverted sense per verify-pins.sh discipline.
+# The '// {}' guard handles the absent network_policies field (correct deny-all
+# state where the key does not appear in the JSON at all).
+assert_no_anthropic_egress() {
+    local sandbox_name="${1}"
+    local policy_json
+    policy_json=$(openshell policy get "${sandbox_name}" --full -o json 2>&1)
+
+    # jq -e exits 0 if a matching entry is found (VIOLATION), non-zero if no match (PASS)
+    if echo "${policy_json}" | jq -e \
+        '.policy.network_policies // {} | to_entries[] | .value.endpoints[]? | select(.host | test("anthropic"; "i"))' \
+        >/dev/null 2>&1; then
+        log_error "NET-04 VIOLATION: Direct Anthropic endpoint found in effective policy!"
+        log_error "Policy output: ${policy_json}"
+        exit 1
+    fi
+    log_info "NET-04 PASS: No direct Anthropic endpoints in effective policy"
+}
+
+# ---------------------------------------------------------------------------
+# NET-05 egress smoke test (Step 6 / D-05)
+# ---------------------------------------------------------------------------
+# Run curl from inside the running sandbox. PASS condition is curl exit != 0
+# (proxy blocks the connection). Any exit 0 (connection succeeded) is a hard
+# violation — zero-egress is broken. Tests two independent targets: a specific
+# Anthropic endpoint and a generic endpoint to prove deny-all (T-03-02).
+# Every openshell invocation below redirects stderr (2>/dev/null) to suppress
+# the non-fatal ".bash_profile: Permission denied" noise (Pitfall 4 / RESEARCH.md).
+run_egress_smoke_test() {
+    local sandbox_name="${1}"
+    local -a targets=("https://api.anthropic.com" "https://example.com")
+
+    for target in "${targets[@]}"; do
+        local rc=0
+        openshell sandbox exec --name "${sandbox_name}" --no-tty -- curl --max-time 8 --silent "${target}" 2>/dev/null || rc=$?
+
+        if [[ ${rc} -eq 0 ]]; then
+            log_error "NET-05 VIOLATION: Egress to ${target} SUCCEEDED — zero-egress is broken!"
+            exit 1
+        fi
+        log_info "NET-05 PASS: ${target} blocked (curl exit ${rc})"
+    done
+}
+
+# ---------------------------------------------------------------------------
 # Audit subcommand (BLD-05 / D-07 — log-surfacing only)
 # ---------------------------------------------------------------------------
 audit_sandbox() {
@@ -232,6 +281,18 @@ else
     log_error "Sandbox ${SANDBOX_NAME} not found after create — check openshell logs for details"
     exit 1
 fi
+
+# ---------------------------------------------------------------------------
+# Step 5: Assert no direct Anthropic egress in live policy (NET-04 / D-02)
+# ---------------------------------------------------------------------------
+log_step 5 "NET-04 — Assert no direct Anthropic egress in live policy"
+assert_no_anthropic_egress "${SANDBOX_NAME}"
+
+# ---------------------------------------------------------------------------
+# Step 6: Egress smoke test — confirm outbound connections are blocked (NET-05 / D-05)
+# ---------------------------------------------------------------------------
+log_step 6 "NET-05 — Egress smoke test (in-sandbox curl)"
+run_egress_smoke_test "${SANDBOX_NAME}"
 
 echo "" >&2
 log_info "rebuild.sh complete — sandbox ${SANDBOX_NAME} is Ready"

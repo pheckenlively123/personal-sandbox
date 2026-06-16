@@ -1,3 +1,17 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+status: Ready to plan
+last_updated: "2026-06-15T23:42:35.796Z"
+progress:
+  total_phases: 4
+  completed_phases: 2
+  total_plans: 5
+  completed_plans: 5
+  percent: 50
+---
+
 # Project State: Claude Sandbox (Fedora 44 / OpenShell)
 
 ---
@@ -6,33 +20,36 @@
 
 **Core Value**: Claude can run fully autonomous (`--dangerously-skip-permissions`) inside a sandbox that has zero direct network egress — all model inference is brokered through the OpenShell gateway — so elevated permissions can't be used to reach or exfiltrate to the open internet.
 
-**Current Focus**: Phase 1 — Dockerfile and Supply-Chain Pinning
+**Current Focus**: Phase 2 — Rebuild Script and Sandbox Lifecycle
 
 ---
 
 ## Current Position
 
-**Phase**: 1 — Dockerfile and Supply-Chain Pinning
-**Plan**: None started
-**Status**: Not started
+Phase: 3
+Plan: Not started
+**Phase**: 2 — Rebuild Script and Sandbox Lifecycle
+**Plan**: 02-02 — Ready to execute
+**Status**: 02-01 complete (BLD-03 satisfied); ready to start 02-02 (rebuild.sh end-to-end slice)
 
 **Overall Progress**:
+
 ```
 [Phase 1] [Phase 2] [Phase 3] [Phase 4]
-[  ....  ] [  ....  ] [  ....  ] [  ....  ]
-  0%          0%          0%          0%
+[ DONE ✓ ] [  ....  ] [  ....  ] [  ....  ]
+  100%        0%          0%          0%
 ```
 
-**Phase Progress**: 0 of 4 phases complete
+**Phase Progress**: 1 of 4 phases complete (25%)
 
 ---
 
 ## Performance Metrics
 
-**Plans executed**: 0
-**Plans succeeded first try**: 0
+**Plans executed**: 3
+**Plans succeeded first try**: 3
 **Repair cycles used**: 0
-**Phases complete**: 0 / 4
+**Phases complete**: 1 / 4
 
 ---
 
@@ -45,6 +62,10 @@
 | 4 phases at coarse granularity | Roadmap | Research's suggested 4-phase structure maps cleanly to the 4 requirement clusters; phases have distinct failure modes worth isolating |
 | RUN-03/RUN-04 (bind mount) in Phase 2 | Roadmap | Bind mount is configured at `openshell sandbox create` time, not at Claude launch time — belongs with lifecycle, not Claude config |
 | RUN-01/RUN-02 (Claude launch flags) in Phase 4 | Roadmap | MCP audit only meaningful after zero-egress confirmed (Phase 3); blocked plugins look like policy failures otherwise |
+| Phase 01 P01 | 427 | 3 tasks | 5 files |
+| Phase 01 P02 | 254 | 2 tasks | 4 files |
+| Phase 01-dockerfile-and-supply-chain-pinning P03 | 7min | 2 tasks | 5 files |
+| Phase 02 P01 | 20min | 3 tasks | 2 files |
 
 ### Open Questions / Risks
 
@@ -60,15 +81,26 @@
 
 ### Blockers
 
-*(None — starting fresh)*
+*(None — Phase 1 shipped clean; the jq-missing build blocker was fixed and re-verified)*
 
 ---
 
 ## Session Continuity
 
-**Last updated**: 2026-06-13 (roadmap created)
-**Last action**: Roadmap and STATE.md written; REQUIREMENTS.md traceability updated
-**Next action**: Begin Phase 1 planning with `/gsd-plan-phase 1`
+**Last updated**: 2026-06-15 (Phase 2, Plan 1 complete — BLD-03 satisfied)
+**Last action**: 02-01-SUMMARY.md committed (574c97a) — plan 01 fully complete; operator verified cooldown.date + build.date labels via podman inspect
+**Next action**: Execute 02-02-PLAN.md (rebuild.sh end-to-end slice)
+**Stopped at**: Completed 02-01-PLAN.md
+**Resume file**: None
 
 ---
 *State initialized: 2026-06-13*
+
+## Decisions
+
+- [Phase ?]: re-query not cached dates
+- [Phase ?]: associative array cache
+- [Phase ?]: CUTOFF_EXCL exclusive next-day-midnight bound replaces T23:59:59Z for all publish-date comparisons in verifier and resolver (CR-01 fix)
+- [Phase 02]: ARG BUILD_DATE + five LABEL lines added to Dockerfile via D-04 pattern (LABEL-via-ARG for portability — provenance travels with image regardless of build entry point)
+- [Phase 02]: build-and-lock.sh --build-date flag added with T-02-01 YYYY-MM-DD allowlist validation before podman build invocation
+- [Phase ?]: [Phase 02]: T-02-01 mitigation — BUILD_DATE allowlist-validated against YYYY-MM-DD regex before podman build invocation; no eval

@@ -573,7 +573,13 @@ These are the ground-truth facts from running live commands against the installe
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED — empirical, confirmed at operator execution time)
+
+> These questions are not pre-execution blockers. Each is an empirical detail that can only
+> be confirmed against the live OpenShell host during execution, and the plans handle the
+> uncertainty by design: the D-06 round-trip is non-fatal, provider creation is an operator
+> `user_setup` precondition (not script logic), and the exact flags/model are documented as
+> manual operator steps in the README. They are recorded here as runtime-confirmed items.
 
 1. **Exact `--type` for OAuth/subscription provider create**
    - What we know: `openshell provider list-profiles` shows `claude-code` as a profile under the AGENT category. The profile reads `ANTHROPIC_API_KEY` for API key auth but also has OAuth discovery via `~/.claude/.credentials.json`. CLAUDE.md says "Exact --type/profile flag confirmed empirically in the inference phase."

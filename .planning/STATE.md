@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-last_updated: "2026-06-16T23:04:27.929Z"
+last_updated: "2026-06-16T23:13:10.914Z"
 progress:
   total_phases: 4
   completed_phases: 2
-  total_plans: 5
-  completed_plans: 5
+  total_plans: 7
+  completed_plans: 6
   percent: 50
 ---
 
@@ -26,8 +26,8 @@ progress:
 
 ## Current Position
 
-Phase: 3
-Plan: Not started
+Phase: 03 (Network Isolation and Inference Validation) — EXECUTING
+Plan: 2 of 2
 **Phase**: 2 — Rebuild Script and Sandbox Lifecycle
 **Plan**: 02-02 — Ready to execute
 **Status**: 02-01 complete (BLD-03 satisfied); ready to start 02-02 (rebuild.sh end-to-end slice)
@@ -66,6 +66,7 @@ Plan: Not started
 | Phase 01 P02 | 254 | 2 tasks | 4 files |
 | Phase 01-dockerfile-and-supply-chain-pinning P03 | 7min | 2 tasks | 5 files |
 | Phase 02 P01 | 20min | 3 tasks | 2 files |
+| Phase 03 P01 | 3min | 2 tasks | 1 files |
 
 ### Open Questions / Risks
 
@@ -87,10 +88,10 @@ Plan: Not started
 
 ## Session Continuity
 
-**Last updated**: 2026-06-15 (Phase 2, Plan 1 complete — BLD-03 satisfied)
-**Last action**: 02-01-SUMMARY.md committed (574c97a) — plan 01 fully complete; operator verified cooldown.date + build.date labels via podman inspect
-**Next action**: Execute 02-02-PLAN.md (rebuild.sh end-to-end slice)
-**Stopped at**: Completed 02-01-PLAN.md
+**Last updated**: 2026-06-16 (Phase 3, Plan 1 complete — NET-01/NET-03/NET-04/NET-05 satisfied)
+**Last action**: 03-01-SUMMARY.md committed (34ea703) — three egress-isolation gates added to rebuild.sh (check_inference_provider, assert_no_anthropic_egress, run_egress_smoke_test)
+**Next action**: Execute 03-02-PLAN.md (inference round-trip + README documentation)
+**Stopped at**: Completed 03-01-PLAN.md
 **Resume file**: None
 
 ---
@@ -102,5 +103,6 @@ Plan: Not started
 - [Phase ?]: associative array cache
 - [Phase ?]: CUTOFF_EXCL exclusive next-day-midnight bound replaces T23:59:59Z for all publish-date comparisons in verifier and resolver (CR-01 fix)
 - [Phase 02]: ARG BUILD_DATE + five LABEL lines added to Dockerfile via D-04 pattern (LABEL-via-ARG for portability — provenance travels with image regardless of build entry point)
+- [Phase 03]: check_inference_provider detects unconfigured provider via ANSI-stripped output grep (not exit code — exits 0 in both states); inverted jq -e for NET-04 policy assertion; two-target smoke test (api.anthropic.com + example.com) proves deny-all not just Anthropic-specific block
 - [Phase 02]: build-and-lock.sh --build-date flag added with T-02-01 YYYY-MM-DD allowlist validation before podman build invocation
 - [Phase ?]: [Phase 02]: T-02-01 mitigation — BUILD_DATE allowlist-validated against YYYY-MM-DD regex before podman build invocation; no eval

@@ -40,6 +40,25 @@ log_info()  { echo "INFO: $1" >&2; }
 log_error() { echo "ERROR: $1" >&2; }
 
 # ---------------------------------------------------------------------------
+# Provider existence preflight (D-03/NET-03)
+# ---------------------------------------------------------------------------
+# openshell inference get exits 0 in BOTH configured and unconfigured states.
+# Detection MUST grep the ANSI-stripped output for "Not configured" — never
+# branch on the exit code (Pitfall 1 from RESEARCH.md).
+check_inference_provider() {
+    local output
+    output=$(openshell inference get 2>&1 | sed 's/\x1B\[[0-9;]*[mK]//g')
+    if echo "${output}" | grep -q "Not configured"; then
+        log_error "Inference provider is not configured — sandbox create would hang ~290s."
+        log_error "One-time setup (operator action, see README):"
+        log_error "  openshell provider create --name claude-code --type claude-code --from-existing"
+        log_error "  openshell inference set --provider claude-code --model <MODEL>"
+        exit 1
+    fi
+    log_info "Inference provider configured — preflight passed"
+}
+
+# ---------------------------------------------------------------------------
 # Audit subcommand (BLD-05 / D-07 — log-surfacing only)
 # ---------------------------------------------------------------------------
 audit_sandbox() {
@@ -106,6 +125,10 @@ for cmd in podman openshell python3 jq; do
     fi
 done
 log_info "Preflight passed — all required tools found"
+
+# Step 0 provider preflight: detect unconfigured inference gateway before the
+# slow sandbox create (mitigates OpenShell #759 ~290s hang on missing provider).
+check_inference_provider
 
 # ---------------------------------------------------------------------------
 # Compute BUILD_DATE once (used for image tag and passed to build-and-lock.sh)

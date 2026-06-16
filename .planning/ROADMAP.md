@@ -81,7 +81,15 @@
   3. `rebuild.sh` runs `openshell inference get` as a preflight check before `sandbox create` and exits with a clear error message if the provider is not registered (preventing the 290-second hang)
   4. The rebuild script asserts the egress policy contains no `api.anthropic.com` or other direct Anthropic endpoint — confirming the zero-egress guarantee has not been violated
 
-**Plans**: TBD
+**Plans:** 2 plans
+
+**Wave 1**
+
+- [ ] 03-01-PLAN.md — Blocking egress-isolation gates: provider preflight (Step 0, NET-03/D-03), live policy assertion (Step 5, NET-04/D-02), blocking egress smoke test (Step 6, NET-05/D-05/NET-01)
+
+**Wave 2** *(blocked on Wave 1 — shares rebuild.sh)*
+
+- [ ] 03-02-PLAN.md — Inference-validation slice: non-fatal round-trip (Step 7, NET-02/D-06), summary banner update, and README operator setup + validation checklist (NET-03/D-04/D-07)
 
 ### Phase 4: Claude Code Launch and MCP Audit
 
@@ -105,7 +113,7 @@
 |-------|----------------|--------|-----------|
 | 1. Dockerfile and Supply-Chain Pinning | 3/3 | Complete    | 2026-06-14 |
 | 2. Rebuild Script and Sandbox Lifecycle | 2/2 | Complete    | 2026-06-15 |
-| 3. Network Isolation and Inference Validation | 0/? | Not started | - |
+| 3. Network Isolation and Inference Validation | 0/2 | Planned | - |
 | 4. Claude Code Launch and MCP Audit | 0/? | Not started | - |
 
 ---

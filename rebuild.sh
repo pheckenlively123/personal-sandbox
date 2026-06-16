@@ -108,6 +108,51 @@ run_egress_smoke_test() {
 }
 
 # ---------------------------------------------------------------------------
+# D-06 inference round-trip (Step 7, non-fatal)
+# ---------------------------------------------------------------------------
+# Fires a single model round-trip through inference.local from inside the
+# sandbox and reports PASS or WARN — never blocks the rebuild (non-fatal gate).
+#
+# Success is detected by parsing the JSON body (.content | length > 0), NOT
+# the curl exit code (which is 0 even on a gateway error body — Pitfall 2
+# from RESEARCH.md). The placeholder x-api-key is never a real credential;
+# the OpenShell gateway injects the real subscription token host-side (NET-03).
+#
+# The URL is https://inference.local/v1/messages (single /v1 path). Do NOT
+# use inference.local/v1/v1 — that double-path anti-pattern is listed in
+# CLAUDE.md "What NOT to Use" and verified via acceptance check.
+#
+# Uses || rc=$? (not bare || true) so the exit code is available for branching.
+# return 0 on every warn path — no exit, no set -e abort.
+run_inference_round_trip() {
+    local sandbox_name="${1}"
+    local response rc=0
+
+    response=$(openshell sandbox exec --name "${sandbox_name}" --no-tty \
+        -- curl --max-time 30 --silent \
+        -X POST https://inference.local/v1/messages \
+        -H "Content-Type: application/json" \
+        -H "x-api-key: placeholder" \
+        -d '{"model":"any","max_tokens":10,"messages":[{"role":"user","content":"ping"}]}' \
+        2>/dev/null) || rc=$?
+
+    if [[ ${rc} -ne 0 ]]; then
+        log_info "D-06 WARN: curl failed (rc=${rc}) — inference path unverified (non-fatal)"
+        ROUND_TRIP_STATUS="WARN (curl exit ${rc})"
+        return 0
+    fi
+    if echo "${response}" | jq -e '.content | length > 0' >/dev/null 2>&1; then
+        log_info "D-06 PASS: inference.local returned a model response"
+        ROUND_TRIP_STATUS="PASS"
+    else
+        local err
+        err=$(echo "${response}" | jq -r '.error // "unknown"' 2>/dev/null || echo "${response}")
+        log_info "D-06 WARN: inference.local error: ${err} (non-fatal — see README for provider setup)"
+        ROUND_TRIP_STATUS="WARN (${err})"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Audit subcommand (BLD-05 / D-07 — log-surfacing only)
 # ---------------------------------------------------------------------------
 audit_sandbox() {
@@ -124,6 +169,7 @@ audit_sandbox() {
 COOLDOWN_DAYS=4
 SANDBOX_NAME="claude-sandbox"
 AUDIT_MODE=false
+ROUND_TRIP_STATUS="NOT RUN"
 
 # ---------------------------------------------------------------------------
 # Argument parsing (mirror build-and-lock.sh two-form style)
@@ -294,9 +340,18 @@ assert_no_anthropic_egress "${SANDBOX_NAME}"
 log_step 6 "NET-05 — Egress smoke test (in-sandbox curl)"
 run_egress_smoke_test "${SANDBOX_NAME}"
 
+# ---------------------------------------------------------------------------
+# Step 7: D-06 — Inference round-trip through inference.local (non-fatal)
+# ---------------------------------------------------------------------------
+log_step 7 "D-06 — Inference round-trip (non-fatal)"
+run_inference_round_trip "${SANDBOX_NAME}"
+
 echo "" >&2
 log_info "rebuild.sh complete — sandbox ${SANDBOX_NAME} is Ready"
 log_info "  Image:          localhost/claude-sandbox:${BUILD_DATE}"
 log_info "  Bind mount:     ${CLAUDESHARED_ABS} -> /claudeshared (read-write)"
 log_info "  Policy:         ${PROJECT_ROOT}/policy.yaml"
 log_info "  Egress audit:   ./rebuild.sh --audit (surfaces openshell logs)"
+log_info "  NET-04:         PASS (no direct Anthropic endpoints in live policy)"
+log_info "  NET-05:         PASS (outbound egress blocked — two targets confirmed)"
+log_info "  Round-trip:     ${ROUND_TRIP_STATUS}"

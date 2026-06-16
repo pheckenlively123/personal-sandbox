@@ -11,7 +11,7 @@
 
 - [x] **Phase 1: Dockerfile and Supply-Chain Pinning** - Working image that installs all tooling with rolling cooldown pinning (verification gaps found — PIN-07 gap closure pending) (completed 2026-06-14)
 - [x] **Phase 2: Rebuild Script and Sandbox Lifecycle** - Idempotent rebuild.sh that builds the image and recreates the sandbox cleanly (completed 2026-06-15)
-- [ ] **Phase 3: Network Isolation and Inference Validation** - Running sandbox with zero direct egress and working model inference via the gateway
+- [x] **Phase 3: Network Isolation and Inference Validation** - Running sandbox with zero direct egress and working model inference via the gateway (completed 2026-06-16)
 - [ ] **Phase 4: Claude Code Launch and MCP Audit** - Claude running autonomously inside the sandbox with toolkit plugins loaded and audited
 
 ---
@@ -81,7 +81,7 @@
   3. `rebuild.sh` runs `openshell inference get` as a preflight check before `sandbox create` and exits with a clear error message if the provider is not registered (preventing the 290-second hang)
   4. The rebuild script asserts the egress policy contains no `api.anthropic.com` or other direct Anthropic endpoint — confirming the zero-egress guarantee has not been violated
 
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 **Wave 1**
 
@@ -89,7 +89,7 @@
 
 **Wave 2** *(blocked on Wave 1 — shares rebuild.sh)*
 
-- [ ] 03-02-PLAN.md — Inference-validation slice: non-fatal round-trip (Step 7, NET-02/D-06), summary banner update, and README operator setup + validation checklist (NET-03/D-04/D-07)
+- [x] 03-02-PLAN.md — Inference-validation slice: non-fatal round-trip (Step 7, NET-02/D-06), summary banner update, and README operator setup + validation checklist (NET-03/D-04/D-07)
 
 ### Phase 4: Claude Code Launch and MCP Audit
 
@@ -113,7 +113,7 @@
 |-------|----------------|--------|-----------|
 | 1. Dockerfile and Supply-Chain Pinning | 3/3 | Complete    | 2026-06-14 |
 | 2. Rebuild Script and Sandbox Lifecycle | 2/2 | Complete    | 2026-06-15 |
-| 3. Network Isolation and Inference Validation | 1/2 | In Progress|  |
+| 3. Network Isolation and Inference Validation | 2/2 | Complete   | 2026-06-16 |
 | 4. Claude Code Launch and MCP Audit | 0/? | Not started | - |
 
 ---

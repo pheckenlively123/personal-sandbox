@@ -3,8 +3,9 @@
 #
 # Computes the rolling cooldown date and resolves top-level version pins for:
 #   - govulncheck (from proxy.golang.org)
-#   - @opengsd/gsd-core (from registry.npmjs.org)
-#   - @anthropic-ai/claude-code (from registry.npmjs.org)
+#
+# npm packages are NOT resolved here; their versions are determined at build time by
+# npm --min-release-age and read post-build from versions-npm.json by build-and-lock.sh.
 #
 # Usage:
 #   bash scripts/resolve-versions.sh [--cooldown-days N]
@@ -12,8 +13,6 @@
 # Outputs (one per line, KEY=VALUE, sourceable by bash):
 #   COOLDOWN_DATE=YYYY-MM-DD
 #   GOVULNCHECK_VERSION=vX.Y.Z
-#   GSD_CORE_VERSION=X.Y.Z
-#   CLAUDE_CODE_VERSION=X.Y.Z
 #
 # All diagnostics go to stderr so stdout stays clean for KEY=VALUE parsing.
 # Exits non-zero on bad input or registry failure.
@@ -138,56 +137,6 @@ if [[ -z "$GOVULNCHECK_VERSION" ]]; then
 fi
 echo "INFO: Resolved govulncheck=${GOVULNCHECK_VERSION} (published ${GOVULNCHECK_PUBDATE})" >&2
 
-# --- Resolve @opengsd/gsd-core from npm registry ---
-echo "INFO: Querying registry.npmjs.org for @opengsd/gsd-core..." >&2
-
-GSD_CORE_DOC=$(curl -sf "https://registry.npmjs.org/@opengsd/gsd-core" 2>/dev/null || true)
-if [[ -z "$GSD_CORE_DOC" ]]; then
-    echo "ERROR: Failed to fetch @opengsd/gsd-core from registry.npmjs.org" >&2
-    exit 1
-fi
-
-# CR-01 fix: use CUTOFF_EXCL (exclusive next-day midnight) instead of .value <= $cutoff.
-# jq string comparison is lexicographic; .value < $cutoff_excl correctly captures any
-# millisecond-precision timestamp on the cutoff day while excluding the next day and later.
-GSD_CORE_VERSION=$(echo "$GSD_CORE_DOC" | jq -r \
-    --arg cutoff_excl "$CUTOFF_EXCL" \
-    '.time | to_entries | map(select(.key != "created" and .key != "modified" and (.value < $cutoff_excl))) | sort_by(.value) | last | .key' \
-    2>/dev/null || true)
-
-if [[ -z "$GSD_CORE_VERSION" ]] || [[ "$GSD_CORE_VERSION" == "null" ]]; then
-    echo "ERROR: No @opengsd/gsd-core version found on or before ${CUTOFF}" >&2
-    exit 1
-fi
-
-GSD_CORE_PUBDATE=$(echo "$GSD_CORE_DOC" | jq -r --arg ver "$GSD_CORE_VERSION" '.time[$ver]' 2>/dev/null || true)
-echo "INFO: Resolved @opengsd/gsd-core=${GSD_CORE_VERSION} (published ${GSD_CORE_PUBDATE})" >&2
-
-# --- Resolve @anthropic-ai/claude-code from npm registry ---
-echo "INFO: Querying registry.npmjs.org for @anthropic-ai/claude-code..." >&2
-
-CLAUDE_CODE_DOC=$(curl -sf "https://registry.npmjs.org/@anthropic-ai/claude-code" 2>/dev/null || true)
-if [[ -z "$CLAUDE_CODE_DOC" ]]; then
-    echo "ERROR: Failed to fetch @anthropic-ai/claude-code from registry.npmjs.org" >&2
-    exit 1
-fi
-
-# CR-01 fix: same CUTOFF_EXCL exclusive bound as above.
-CLAUDE_CODE_VERSION=$(echo "$CLAUDE_CODE_DOC" | jq -r \
-    --arg cutoff_excl "$CUTOFF_EXCL" \
-    '.time | to_entries | map(select(.key != "created" and .key != "modified" and (.value < $cutoff_excl))) | sort_by(.value) | last | .key' \
-    2>/dev/null || true)
-
-if [[ -z "$CLAUDE_CODE_VERSION" ]] || [[ "$CLAUDE_CODE_VERSION" == "null" ]]; then
-    echo "ERROR: No @anthropic-ai/claude-code version found on or before ${CUTOFF}" >&2
-    exit 1
-fi
-
-CLAUDE_CODE_PUBDATE=$(echo "$CLAUDE_CODE_DOC" | jq -r --arg ver "$CLAUDE_CODE_VERSION" '.time[$ver]' 2>/dev/null || true)
-echo "INFO: Resolved @anthropic-ai/claude-code=${CLAUDE_CODE_VERSION} (published ${CLAUDE_CODE_PUBDATE})" >&2
-
 # --- Emit sourceable KEY=VALUE lines to stdout (NO extra stdout noise) ---
 echo "COOLDOWN_DATE=${COOLDOWN_DATE}"
 echo "GOVULNCHECK_VERSION=${GOVULNCHECK_VERSION}"
-echo "GSD_CORE_VERSION=${GSD_CORE_VERSION}"
-echo "CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}"

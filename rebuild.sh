@@ -47,7 +47,15 @@ log_error() { echo "ERROR: $1" >&2; }
 # → "Connection refused"). Under `set -euo pipefail` the line-50 command
 # substitution must tolerate that non-zero (|| rc=$?) or it aborts the whole
 # script silently before the grep. Three states are distinguished: unreachable
-# (rc!=0), not-configured ("Not configured" sentinel), configured.
+# (rc!=0), not-configured, configured.
+#
+# `openshell inference get` prints TWO routes: "Gateway inference:" (the
+# user-facing route that inference.local — and thus Claude Code — uses) and
+# "System inference:" (the sandbox-system route, used only by platform/agent-harness
+# functions and never by user code). We configure only the gateway route, so
+# "System inference: Not configured" persists; checking it would falsely fail.
+# Therefore inspect ONLY the Gateway inference section. (Confirmed against
+# OpenShell source: run.rs prints both routes; --system selects sandbox-system.)
 check_inference_provider() {
     local output rc=0
     output=$(openshell inference get 2>&1 | sed 's/\x1B\[[0-9;]*[mK]//g') || rc=$?
@@ -58,7 +66,16 @@ check_inference_provider() {
         log_error "Detail: ${output}"
         exit 1
     fi
-    if echo "${output}" | grep -q "Not configured"; then
+
+    # Isolate the Gateway inference block (lines after "Gateway inference:" up to
+    # but not including "System inference:"); the system route is intentionally ignored.
+    local gateway_block
+    gateway_block=$(printf '%s\n' "${output}" | awk '
+        /^Gateway inference:/ {cap=1; next}
+        /^System inference:/  {cap=0}
+        cap {print}
+    ')
+    if printf '%s\n' "${gateway_block}" | grep -qE "Not configured|Error:"; then
         log_error "Inference provider is not configured — sandbox create would hang ~290s."
         log_error "One-time setup (operator action, see README):"
         log_error "  openshell provider create --name claude-code --type claude-code --from-existing"

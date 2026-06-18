@@ -18,16 +18,28 @@ idempotent). There is no partial-update path.
 ### Options
 
 ```
-./rebuild.sh [--cooldown-days N]   # Override the supply-chain cooldown window (default: 4 days)
-./rebuild.sh --audit               # Surface openshell logs without rebuilding (see below)
+./rebuild.sh [--cooldown-days N] [--model <id>]   # Full rebuild; override cooldown window or gateway model
+./rebuild.sh --set-model <id>                      # Configure inference provider + gateway model only, then exit
+./rebuild.sh --audit                               # Surface openshell logs without rebuilding (see below)
 ```
+
+`--model <id>` sets the gateway model used for this rebuild (default: `claude-opus-4-8`).
+
+`--set-model <id>` is the fast-switch path: it configures the inference provider and sets the gateway
+model without running a full rebuild (no image build, teardown, or sandbox create). Use this to change
+the model between sessions. After switching, start a **new Claude session** so Claude Code picks up the
+new model. The OpenShell gateway hard-overrides the model for all requests — one model per gateway, by
+design; per-request model selection is not supported.
 
 ### What the rebuild does
 
-0. **Provider preflight** — runs `openshell inference get` before anything else to confirm the
-   inference provider is registered. Exits immediately with an actionable error if not configured,
-   preventing the ~290s hang (OpenShell #759). This is a host-side operator action; see
-   [One-time inference provider setup](#one-time-inference-provider-setup) below.
+0. **Ensure inference provider** — idempotently creates or updates the `claude-code` inference
+   provider and sets the gateway model (`--model`, default `claude-opus-4-8`) before any image
+   build. Includes podman autostart (starts the podman machine if not running). The only host
+   prerequisite is being logged into Claude Code on the host (`~/.claude/.credentials.json` /
+   macOS keychain — OAuth, no API key); `rebuild.sh` does the rest. After ensuring, runs a
+   provider preflight to confirm the gateway is reachable, preventing the ~290s hang (OpenShell
+   #759).
 1. **Preflight** — verifies `podman`, `openshell`, `python3`, and `jq` are on `PATH`.
 2. **Resolve + build** — delegates to `scripts/build-and-lock.sh`, which resolves cooldown-pinned
    versions and runs `podman build`. The image is tagged `localhost/claude-sandbox:<YYYY-MM-DD>`.
@@ -88,37 +100,50 @@ an observation tool, not a security gate.
 
 ---
 
-## One-time inference provider setup
+## Inference provider setup (automated by rebuild.sh)
 
-This is a **host-side operator action** — `rebuild.sh` asserts that it has been done (Step 0
-preflight) but never performs it. Credentials are never baked into the image or Dockerfile
-(NET-03/D-04): the OpenShell gateway injects the real subscription credential host-side by reading
-your existing Claude Code OAuth state. No `ANTHROPIC_API_KEY` is involved.
+**This is now automated.** `rebuild.sh` idempotently creates or updates the `claude-code`
+inference provider and sets the gateway model at Step 0 before every build. You do not need
+to run any manual `openshell provider create` or `openshell inference set` commands.
 
-Run these commands once on the host before the first `./rebuild.sh`:
+**The only host prerequisite is being logged into Claude Code on the host** — `rebuild.sh`
+reads your existing Claude Code OAuth state via `--from-existing`
+(`~/.claude/.credentials.json` / macOS keychain). No `ANTHROPIC_API_KEY` is involved.
+
+Credentials are never baked into the image or Dockerfile (NET-03/D-04): the OpenShell gateway
+injects the real subscription credential host-side when forwarding requests, so the sandbox
+itself never holds a real token. `openshell inference get` will show `System inference: Not
+configured` alongside the configured Gateway inference route — this is expected. The system
+route is only used by platform/agent-harness functions, not by Claude Code; only the Gateway
+inference route matters (and it is what `rebuild.sh` configures).
+
+What `rebuild.sh` runs under the hood (for reference):
 
 ```bash
-# Register the inference provider using your existing Claude Code subscription login
-# (reads ~/.claude/.credentials.json / macOS keychain — OAuth, no API key needed)
+# If provider not present:
 openshell provider create --name claude-code --type claude-code --from-existing
+# If provider already present (re-sync OAuth token):
+openshell provider update claude-code --from-existing
 
-# Point the gateway at the provider and set the model
-# Replace <MODEL> with the model name your Claude subscription provides
-# (e.g. claude-opus-4-5, claude-sonnet-4-5 — confirm with `openshell inference get` after set)
-openshell inference set --provider claude-code --model <MODEL>
-
-# Verify registration
-openshell inference get
-
-# Check provider credential freshness
-openshell provider refresh status claude-code
+# Set gateway model (--model flag, default claude-opus-4-8):
+openshell inference set --provider claude-code --model claude-opus-4-8
 ```
 
-**Note:** `--type claude-code` is the assumed subscription/OAuth profile type; confirm the exact
-value on first run if `openshell provider create` reports an unrecognized type. `--from-existing`
-reads your host Claude Code OAuth state — it is only valid as a host-shell command, never inside
-the Dockerfile or sandbox (per CLAUDE.md "What NOT to Use"). Until this setup is complete, `./rebuild.sh`
-will exit at Step 0 with an actionable error, and the Step 7 round-trip will report WARN.
+**Switching models between sessions** — the OpenShell gateway hard-overrides the model for
+all requests (one model per gateway, by design). To switch without a full rebuild:
+
+```bash
+./rebuild.sh --set-model claude-sonnet-4-5
+```
+
+Then start a **new Claude session** to pick up the change.
+
+To verify the current provider configuration:
+
+```bash
+openshell inference get
+openshell provider refresh status claude-code
+```
 
 ---
 

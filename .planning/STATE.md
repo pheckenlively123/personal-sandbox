@@ -89,6 +89,7 @@ Plan: 2 of 2
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260618-p6b | npm cooldown via --min-release-age + explicit script/source flags | 2026-06-18 | a930856 | [260618-p6b-npm-cooldown-via-min-release-age-plus-ex](./quick/260618-p6b-npm-cooldown-via-min-release-age-plus-ex/) |
+| fast | rebuild.sh: distinguish gateway-unreachable from not-configured (silent-exit fix) | 2026-06-18 | b25afdd | — |
 
 ---
 

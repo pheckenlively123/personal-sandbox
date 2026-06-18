@@ -5,8 +5,7 @@ FROM fedora:44
 # All version strings come from ARGs only — no hardcoded versions in this file (Pitfall 1).
 ARG COOLDOWN_DATE
 ARG GOVULNCHECK_VERSION
-ARG GSD_CORE_VERSION
-ARG CLAUDE_CODE_VERSION
+ARG COOLDOWN_DAYS
 ARG BUILD_DATE
 
 # Provenance labels (D-04): declared via ARG so values travel with the image regardless
@@ -15,8 +14,7 @@ ARG BUILD_DATE
 LABEL cooldown.date="${COOLDOWN_DATE}"
 LABEL build.date="${BUILD_DATE}"
 LABEL govulncheck.version="${GOVULNCHECK_VERSION}"
-LABEL gsd.core.version="${GSD_CORE_VERSION}"
-LABEL claude.code.version="${CLAUDE_CODE_VERSION}"
+# npm package versions are no longer known at build time; provenance lives in versions.lock + versions-npm.json.
 
 # Step 1: System packages — cache-busted by COOLDOWN_DATE ARG above.
 # golang and golangci-lint installed via RPM per CLAUDE.md (IMG-03, IMG-04).
@@ -42,16 +40,32 @@ ENV GOPATH=/root/go
 ENV PATH="${PATH}:/root/go/bin"
 RUN go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
 
-# Step 4: gsd-core via npm — top-level pin + transitive cooldown via --before (PIN-04, D-02).
-# --before must use end-of-day UTC (T23:59:59Z) to include versions published on the cutoff day
-# (Pitfall 2: inclusive end-of-day cutoff). COOLDOWN_DATE is YYYY-MM-DD; append T23:59:59Z here.
-# gsd-core --claude --global runs bin/install.js which writes Claude hooks to /root/.claude/ (Pitfall 5).
-RUN npm install -g @opengsd/gsd-core@${GSD_CORE_VERSION} --before="${COOLDOWN_DATE}T23:59:59Z" && \
+# Step 4: gsd-core via npm — native cooldown via --min-release-age (PIN-04, D-02).
+# --min-release-age selects the latest dist-tag version older than COOLDOWN_DAYS days and pins the
+# full transitive tree to that window (npm 11 native, no pre-resolved version pin needed).
+# Script policy: --ignore-scripts — gsd-core 1.4.0 has no install/preinstall/postinstall scripts;
+# setup is done by the explicit gsd-core --claude --global call below.
+# Source policy: --allow-git/remote/directory=none — registry-only; defaults are permissive (all).
+# Cache-bust: echo "cooldown=${COOLDOWN_DATE}" keeps COOLDOWN_DATE visible in this RUN layer so
+# the cache is invalidated on every cooldown-date change (not relying solely on the ARG anchor).
+RUN echo "cooldown=${COOLDOWN_DATE}" >/dev/null && \
+    npm install -g @opengsd/gsd-core \
+        --min-release-age=${COOLDOWN_DAYS} \
+        --ignore-scripts \
+        --allow-git=none --allow-remote=none --allow-directory=none && \
     gsd-core --claude --global
 
-# Step 5: Claude Code CLI via npm — top-level pin + transitive cooldown via --before (PIN-05).
-# Same end-of-day cutoff to include versions published on the cutoff day itself.
-RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} --before="${COOLDOWN_DATE}T23:59:59Z"
+# Step 5: Claude Code CLI via npm — native cooldown via --min-release-age (PIN-05).
+# Script policy: --allow-scripts @anthropic-ai/claude-code — claude-code requires its first-party
+# postinstall (node install.cjs, confirmed on 2.1.169); this permits only its own script and
+# blocks all transitive-dep scripts.
+# Source policy: --allow-git/remote/directory=none — registry-only (same rationale as Step 4).
+# Cache-bust: echo "cooldown=${COOLDOWN_DATE}" invalidates this layer on every cooldown-date change.
+RUN echo "cooldown=${COOLDOWN_DATE}" >/dev/null && \
+    npm install -g @anthropic-ai/claude-code \
+        --min-release-age=${COOLDOWN_DAYS} \
+        --allow-scripts @anthropic-ai/claude-code \
+        --allow-git=none --allow-remote=none --allow-directory=none
 
 # Step 6: Clone claude-engineering-toolkit — latest HEAD, no cooldown (IMG-05).
 # Operator-maintained fork is trusted (T-01-05 accept). Must clone at build time;

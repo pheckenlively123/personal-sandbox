@@ -91,6 +91,7 @@ Plan: 2 of 2
 | 260618-p6b | npm cooldown via --min-release-age + explicit script/source flags | 2026-06-18 | a930856 | [260618-p6b-npm-cooldown-via-min-release-age-plus-ex](./quick/260618-p6b-npm-cooldown-via-min-release-age-plus-ex/) |
 | fast | rebuild.sh: distinguish gateway-unreachable from not-configured (silent-exit fix) | 2026-06-18 | b25afdd | — |
 | fast | rebuild.sh: check only Gateway inference route (ignore System/sandbox-system) in provider gate | 2026-06-18 | d166241 | — |
+| 260618-qr4 | Automate inference provider setup in rebuild.sh (--model default opus-4-8, --set-model fast-switch, podman autostart, create-or-update) | 2026-06-18 | 4b4337d | [260618-qr4-automate-inference-provider-setup-in-reb](./quick/260618-qr4-automate-inference-provider-setup-in-reb/) |
 
 ---
 

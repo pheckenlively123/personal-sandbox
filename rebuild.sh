@@ -42,12 +42,22 @@ log_error() { echo "ERROR: $1" >&2; }
 # ---------------------------------------------------------------------------
 # Provider existence preflight (D-03/NET-03)
 # ---------------------------------------------------------------------------
-# openshell inference get exits 0 in BOTH configured and unconfigured states.
-# Detection MUST grep the ANSI-stripped output for "Not configured" — never
-# branch on the exit code (Pitfall 1 from RESEARCH.md).
+# openshell inference get exits 0 when the gateway is reachable (configured OR
+# "Not configured"), but exits NON-ZERO on a transport error (gateway/podman down
+# → "Connection refused"). Under `set -euo pipefail` the line-50 command
+# substitution must tolerate that non-zero (|| rc=$?) or it aborts the whole
+# script silently before the grep. Three states are distinguished: unreachable
+# (rc!=0), not-configured ("Not configured" sentinel), configured.
 check_inference_provider() {
-    local output
-    output=$(openshell inference get 2>&1 | sed 's/\x1B\[[0-9;]*[mK]//g')
+    local output rc=0
+    output=$(openshell inference get 2>&1 | sed 's/\x1B\[[0-9;]*[mK]//g') || rc=$?
+
+    if [[ ${rc} -ne 0 ]]; then
+        log_error "Could not reach the OpenShell inference gateway (openshell inference get exited ${rc})."
+        log_error "The podman/gateway backend may be down. Try: podman machine start"
+        log_error "Detail: ${output}"
+        exit 1
+    fi
     if echo "${output}" | grep -q "Not configured"; then
         log_error "Inference provider is not configured — sandbox create would hang ~290s."
         log_error "One-time setup (operator action, see README):"

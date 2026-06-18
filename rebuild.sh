@@ -2,10 +2,13 @@
 # rebuild.sh — Idempotent top-level orchestrator for the claude-sandbox lifecycle.
 #
 # Usage:
-#   ./rebuild.sh [--cooldown-days N]
+#   ./rebuild.sh [--cooldown-days N] [--model <id>]
+#   ./rebuild.sh --set-model <id>
 #   ./rebuild.sh --audit
 #
 # Steps (normal mode):
+#   0. Ensure inference provider — idempotently create-or-update the claude-code
+#      provider and set the gateway model (--model, default claude-opus-4-8)
 #   1. Preflight — verify required tools are on PATH
 #   2. Resolve cooldown versions and build container image (delegates to build-and-lock.sh)
 #   3. Tag :latest alias
@@ -13,7 +16,8 @@
 #   5. Create sandbox with ~/claudeshared bind mount and policy.yaml
 #
 # Subcommands:
-#   --audit   Surface openshell logs for claude-sandbox without rebuilding (BLD-05)
+#   --audit       Surface openshell logs for claude-sandbox without rebuilding (BLD-05)
+#   --set-model   Configure inference provider + gateway model only, then exit (no rebuild)
 #
 # Decisions:
 #   D-01: Full clean rebuild every run (tear down existing sandbox + images before create)
@@ -38,6 +42,95 @@ log_step() {
 }
 log_info()  { echo "INFO: $1" >&2; }
 log_error() { echo "ERROR: $1" >&2; }
+
+# ---------------------------------------------------------------------------
+# Inference provider create-or-update (NET-03 / D-04)
+# ---------------------------------------------------------------------------
+# Idempotently ensures the claude-code inference provider exists and the gateway
+# model is set to ${MODEL}. Called at Step 0 of a full rebuild and by --set-model.
+#
+# The OpenShell gateway hard-overrides the model for all requests it routes —
+# one model per gateway, by design. To switch models without a full rebuild, use:
+#   ./rebuild.sh --set-model <id>
+# then start a NEW Claude session so Claude Code picks up the new model.
+#
+# Steps:
+#   1. Podman autostart — ensure the podman machine is running (gateway requires it).
+#   2. Provider create-or-update — detect existence via `openshell provider get`;
+#      create if absent, update if present (re-syncs the --from-existing OAuth token).
+#      `--from-existing` reads ~/.claude/.credentials.json / macOS keychain (host OAuth).
+#      Failure means the operator is not logged into Claude Code on the host → exit 1.
+#   3. Set gateway model — `openshell inference set --provider claude-code --model`.
+ensure_inference_provider() {
+    # --- Step 1: Podman autostart ---
+    local podman_state rc_inspect=0
+    podman_state=$(podman machine inspect --format '{{.State}}' 2>/dev/null) || rc_inspect=$?
+    if [[ ${rc_inspect} -ne 0 || "${podman_state}" != "running" ]]; then
+        log_info "Podman machine not running (state=${podman_state:-unknown}); starting..."
+        podman machine start
+        # Re-check after start
+        local rc_recheck=0
+        podman_state=$(podman machine inspect --format '{{.State}}' 2>/dev/null) || rc_recheck=$?
+        if [[ ${rc_recheck} -ne 0 || "${podman_state}" != "running" ]]; then
+            log_error "Podman machine failed to start (state=${podman_state:-unknown})."
+            log_error "Try: podman machine start"
+            exit 1
+        fi
+    fi
+    log_info "Podman machine is running"
+
+    # Verify the OpenShell gateway is reachable before provider operations
+    local gw_rc=0
+    openshell inference get >/dev/null 2>&1 || gw_rc=$?
+    if [[ ${gw_rc} -ne 0 ]]; then
+        log_error "OpenShell inference gateway unreachable after podman start (openshell inference get exited ${gw_rc})."
+        log_error "Try: podman machine start; openshell inference get"
+        exit 1
+    fi
+
+    # --- Step 2: Provider create-or-update ---
+    local provider_rc=0
+    openshell provider get claude-code >/dev/null 2>&1 || provider_rc=$?
+    if [[ ${provider_rc} -ne 0 ]]; then
+        log_info "Provider claude-code not found — creating..."
+        local create_out create_rc=0
+        create_out=$(openshell provider create --name claude-code --type claude-code --from-existing 2>&1) || create_rc=$?
+        if [[ ${create_rc} -ne 0 ]]; then
+            # Tolerate AlreadyExists (race or prior partial run)
+            if echo "${create_out}" | grep -qi "AlreadyExists\|already exists"; then
+                log_info "Provider claude-code already exists (tolerated AlreadyExists on create)"
+            else
+                log_error "openshell provider create failed (exit ${create_rc}): ${create_out}"
+                log_error "Ensure you are logged into Claude Code on the host: run 'claude' once to authenticate."
+                log_error "--from-existing reads ~/.claude/.credentials.json / macOS keychain (OAuth, no API key)."
+                exit 1
+            fi
+        else
+            log_info "Provider claude-code created"
+        fi
+    else
+        log_info "Provider claude-code exists — updating credentials (--from-existing)..."
+        local update_out update_rc=0
+        update_out=$(openshell provider update claude-code --from-existing 2>&1) || update_rc=$?
+        if [[ ${update_rc} -ne 0 ]]; then
+            log_error "openshell provider update failed (exit ${update_rc}): ${update_out}"
+            log_error "Ensure you are logged into Claude Code on the host: run 'claude' once to authenticate."
+            log_error "--from-existing reads ~/.claude/.credentials.json / macOS keychain (OAuth, no API key)."
+            exit 1
+        fi
+        log_info "Provider claude-code credentials refreshed"
+    fi
+
+    # --- Step 3: Set gateway model ---
+    log_info "Setting gateway model to ${MODEL}..."
+    local set_out set_rc=0
+    set_out=$(openshell inference set --provider claude-code --model "${MODEL}" 2>&1) || set_rc=$?
+    if [[ ${set_rc} -ne 0 ]]; then
+        log_error "openshell inference set failed (exit ${set_rc}): ${set_out}"
+        exit 1
+    fi
+    log_info "Gateway model set to ${MODEL}"
+}
 
 # ---------------------------------------------------------------------------
 # Provider existence preflight (D-03/NET-03)
@@ -197,6 +290,8 @@ COOLDOWN_DAYS=4
 SANDBOX_NAME="claude-sandbox"
 AUDIT_MODE=false
 ROUND_TRIP_STATUS="NOT RUN"
+MODEL="claude-opus-4-8"
+SET_MODEL_MODE=false
 
 # ---------------------------------------------------------------------------
 # Argument parsing (mirror build-and-lock.sh two-form style)
@@ -219,14 +314,52 @@ while [[ $# -gt 0 ]]; do
             AUDIT_MODE=true
             shift
             ;;
+        --model)
+            if [[ -z "${2-}" ]]; then
+                log_error "--model requires an argument"
+                exit 1
+            fi
+            MODEL="$2"
+            shift 2
+            ;;
+        --model=*)
+            MODEL="${1#--model=}"
+            shift
+            ;;
+        --set-model)
+            if [[ -z "${2-}" ]]; then
+                log_error "--set-model requires an argument"
+                exit 1
+            fi
+            MODEL="$2"
+            SET_MODEL_MODE=true
+            shift 2
+            ;;
+        --set-model=*)
+            MODEL="${1#--set-model=}"
+            SET_MODEL_MODE=true
+            shift
+            ;;
         *)
             log_error "Unknown argument: $1"
-            echo "Usage: $0 [--cooldown-days N]" >&2
+            echo "Usage: $0 [--cooldown-days N] [--model <id>]" >&2
+            echo "       $0 --set-model <id>" >&2
             echo "       $0 --audit" >&2
             exit 1
             ;;
     esac
 done
+
+# ---------------------------------------------------------------------------
+# Model-id allowlist validation (injection guard — mirrors T-02-01 BUILD_DATE pattern)
+# ---------------------------------------------------------------------------
+# MODEL flows into an openshell CLI argument; validate before it reaches any command.
+# Pattern mirrors scripts/build-and-lock.sh:69-73 allowlist style.
+if ! [[ "${MODEL}" =~ ^claude-[A-Za-z0-9._-]+$ ]]; then
+    log_error "Invalid model id: '${MODEL}'"
+    log_error "Model id must match ^claude-[A-Za-z0-9._-]+$ (e.g. claude-opus-4-8, claude-sonnet-4-5)"
+    exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # --audit subcommand: surface logs and exit without building (BLD-05)
@@ -248,7 +381,24 @@ for cmd in podman openshell python3 jq; do
 done
 log_info "Preflight passed — all required tools found"
 
-# Step 0 provider preflight: detect unconfigured inference gateway before the
+# ---------------------------------------------------------------------------
+# --set-model fast-switch: configure inference only, then exit (no rebuild)
+# ---------------------------------------------------------------------------
+if [[ "${SET_MODEL_MODE}" == "true" ]]; then
+    log_info "--set-model mode: configuring inference provider + gateway model (no rebuild)"
+    ensure_inference_provider
+    check_inference_provider
+    log_info "Gateway model set to ${MODEL}; start a new Claude session to use it"
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Step 0: Ensure inference provider + gateway model (NET-03 / D-04)
+# ---------------------------------------------------------------------------
+log_step 0 "Ensure inference provider (create-or-update) + set gateway model"
+ensure_inference_provider
+
+# Step 0b provider preflight: verify the configured provider is readable before the
 # slow sandbox create (mitigates OpenShell #759 ~290s hang on missing provider).
 check_inference_provider
 

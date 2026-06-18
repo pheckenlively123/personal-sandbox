@@ -84,14 +84,20 @@ Plan: 2 of 2
 
 *(None — Phase 1 shipped clean; the jq-missing build blocker was fixed and re-verified)*
 
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260618-p6b | npm cooldown via --min-release-age + explicit script/source flags | 2026-06-18 | a930856 | [260618-p6b-npm-cooldown-via-min-release-age-plus-ex](./quick/260618-p6b-npm-cooldown-via-min-release-age-plus-ex/) |
+
 ---
 
 ## Session Continuity
 
-**Last updated**: 2026-06-16 (Phase 3, Plan 1 complete — NET-01/NET-03/NET-04/NET-05 satisfied)
-**Last action**: 03-01-SUMMARY.md committed (34ea703) — three egress-isolation gates added to rebuild.sh (check_inference_provider, assert_no_anthropic_egress, run_egress_smoke_test)
-**Next action**: Execute 03-02-PLAN.md (inference round-trip + README documentation)
-**Stopped at**: Completed 03-01-PLAN.md
+**Last updated**: 2026-06-18 (Quick task 260618-p6b complete — npm cooldown switched to --min-release-age + explicit script/source policy)
+**Last action**: Quick task 260618-p6b committed (a930856) — Dockerfile/resolve-versions.sh/build-and-lock.sh/CLAUDE.md updated for native npm cooldown and registry-only/script-hardened installs
+**Next action**: Operator runs ./rebuild.sh to validate the new build (verify-pins.sh PASS + in-image claude/gsd-core functional checks); then Phase 4
+**Stopped at**: Phase 3 complete + quick task 260618-p6b complete
 **Resume file**: None
 
 ---

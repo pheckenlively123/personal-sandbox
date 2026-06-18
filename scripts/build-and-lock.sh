@@ -85,8 +85,6 @@ echo "INFO: Running resolve-versions.sh --cooldown-days ${COOLDOWN_DAYS}" >&2
 # Unknown keys are rejected. Valid pairs are assigned via printf -v (no eval).
 COOLDOWN_DATE=""
 GOVULNCHECK_VERSION=""
-GSD_CORE_VERSION=""
-CLAUDE_CODE_VERSION=""
 
 while IFS='=' read -r key val; do
     # Skip blank lines and comment lines
@@ -100,7 +98,7 @@ while IFS='=' read -r key val; do
             fi
             printf -v COOLDOWN_DATE '%s' "${val}"
             ;;
-        GOVULNCHECK_VERSION|GSD_CORE_VERSION|CLAUDE_CODE_VERSION)
+        GOVULNCHECK_VERSION)
             if ! [[ "${val}" =~ ^v?[0-9][0-9A-Za-z._-]*$ ]]; then
                 echo "ERROR: Resolver emitted invalid ${key} value: '${val}'" >&2
                 exit 1
@@ -116,7 +114,7 @@ done < <(bash "${SCRIPT_DIR}/resolve-versions.sh" --cooldown-days "${COOLDOWN_DA
 
 # IN-01 fix: validate non-empty BEFORE logging, so set -u cannot abort with an
 # unbound-variable error before the friendly validation message fires.
-for VAR in COOLDOWN_DATE GOVULNCHECK_VERSION GSD_CORE_VERSION CLAUDE_CODE_VERSION; do
+for VAR in COOLDOWN_DATE GOVULNCHECK_VERSION; do
     if [[ -z "${!VAR:-}" ]]; then
         echo "ERROR: Resolver did not emit ${VAR}" >&2
         exit 1
@@ -125,8 +123,6 @@ done
 
 echo "INFO: COOLDOWN_DATE=${COOLDOWN_DATE}" >&2
 echo "INFO: GOVULNCHECK_VERSION=${GOVULNCHECK_VERSION}" >&2
-echo "INFO: GSD_CORE_VERSION=${GSD_CORE_VERSION}" >&2
-echo "INFO: CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}" >&2
 
 echo "" >&2
 echo "=== Step 2: Build container image ===" >&2
@@ -135,8 +131,7 @@ echo "INFO: Building image ${IMAGE_TAG} with podman..." >&2
 podman build \
     --build-arg "COOLDOWN_DATE=${COOLDOWN_DATE}" \
     --build-arg "GOVULNCHECK_VERSION=${GOVULNCHECK_VERSION}" \
-    --build-arg "GSD_CORE_VERSION=${GSD_CORE_VERSION}" \
-    --build-arg "CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}" \
+    --build-arg "COOLDOWN_DAYS=${COOLDOWN_DAYS}" \
     --build-arg "BUILD_DATE=${BUILD_DATE}" \
     --tag "${IMAGE_TAG}" \
     "${PROJECT_ROOT}"
@@ -176,6 +171,26 @@ if [[ ! -f "${PROJECT_ROOT}/versions-govulncheck.txt" ]]; then
     echo "ERROR: versions-govulncheck.txt was not extracted from image" >&2
     exit 1
 fi
+
+# Derive resolved npm versions from the in-image snapshot (versions now known post-build).
+# npm --min-release-age resolves the exact versions at build time; we read them here
+# to populate versions.lock and the INFO summary.
+GSD_CORE_VERSION=$(jq -r '.dependencies["@opengsd/gsd-core"].version // empty' \
+    "${PROJECT_ROOT}/versions-npm.json" 2>/dev/null || true)
+if [[ -z "${GSD_CORE_VERSION}" ]]; then
+    echo "ERROR: Could not read @opengsd/gsd-core version from versions-npm.json (empty or missing key)" >&2
+    exit 1
+fi
+
+CLAUDE_CODE_VERSION=$(jq -r '.dependencies["@anthropic-ai/claude-code"].version // empty' \
+    "${PROJECT_ROOT}/versions-npm.json" 2>/dev/null || true)
+if [[ -z "${CLAUDE_CODE_VERSION}" ]]; then
+    echo "ERROR: Could not read @anthropic-ai/claude-code version from versions-npm.json (empty or missing key)" >&2
+    exit 1
+fi
+
+echo "INFO: @opengsd/gsd-core (resolved post-build): ${GSD_CORE_VERSION}" >&2
+echo "INFO: @anthropic-ai/claude-code (resolved post-build): ${CLAUDE_CODE_VERSION}" >&2
 
 echo "" >&2
 echo "=== Step 4: Assemble versions.lock ===" >&2

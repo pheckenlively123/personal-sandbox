@@ -143,18 +143,18 @@ A reproducible, network-isolated development sandbox — built as an NVIDIA Open
 
 # Step 2: Run the installer to deploy hooks/commands into ~/.claude
 
-- `npm install -g @opengsd/gsd-core@VERSION --before=DATE` installs the package and pins all transitive deps to versions released before `DATE`. The `--before` flag applies to direct and transitive dependencies (verified against npm v11 docs).
+- `npm install -g @opengsd/gsd-core --min-release-age=${COOLDOWN_DAYS} --ignore-scripts --allow-git=none --allow-remote=none --allow-directory=none` installs the package and pins all transitive deps to versions older than `COOLDOWN_DAYS` days. `--min-release-age` applies to direct and transitive dependencies (npm 11 native cooldown).
 - `gsd-core --claude --global` then runs `bin/install.js` which writes the actual Claude Code integration files (commands, hooks, agent definitions) into `~/.claude/`.
-- `npx` does not support `--before` or `--min-release-age`. Pinning transitive deps requires `npm install`.
-- Using `@latest` without `--before` would resolve to the current latest (1.4.5 as of 2026-06-13), which postdates the cooldown.
+- `npx` does not support `--min-release-age`. Pinning transitive deps requires `npm install`.
+- `--ignore-scripts` is safe for gsd-core 1.4.0 — it has no `install`/`preinstall`/`postinstall` scripts; `prepare` does not run for registry installs; real setup is the explicit `gsd-core --claude --global`.
 
-### npm --before: What It Actually Does
+### npm --min-release-age: What It Actually Does
 
-- Rebuilds the entire dependency tree using only versions published on or before the given date
+- Resolves the latest dist-tag version older than the specified number of days
+- Rebuilds the entire dependency tree using only versions satisfying that age requirement
 - Applies to **all** transitive dependencies, not just direct dependencies
-- If no version exists before the cutoff for a required package, `npm install` errors
-- When a dist-tag (like `@latest`) is used, it resolves the most recent version within the date filter
-- `--min-release-age=<days>` is the relative equivalent (e.g. `--min-release-age=4`)
+- If no version satisfies the age requirement for a required package, `npm install` errors
+- Reproducibility trade-off: the resolved versions are relative to build wall-clock time; `versions.lock` records the actual resolved versions post-build; `verify-pins.sh` re-checks all resolved packages against the absolute `COOLDOWN_DATE` and is the absolute backstop
 
 ## 5. Claude Code CLI
 
@@ -174,11 +174,12 @@ A reproducible, network-isolated development sandbox — built as an NVIDIA Open
 
 ### Install Command in Dockerfile
 
-- Explicit version pin ensures the correct top-level package is installed
-- `--before` ensures all transitive dependencies are also pinned to pre-cooldown versions
-- Claude Code ships frequently (daily releases); without pinning, `@latest` would pull 2.1.177
-- The native installer at `https://claude.ai/install.sh` (or the npm installer triggered by `npx @anthropic-ai/claude-code`) runs interactively and cannot be version-pinned at the transitive dependency level
-- `npm install -g @anthropic-ai/claude-code@VERSION` is the correct containerized approach (no interactive prompts, reproducible)
+- `npm install -g @anthropic-ai/claude-code --min-release-age=${COOLDOWN_DAYS} --allow-scripts @anthropic-ai/claude-code --allow-git=none --allow-remote=none --allow-directory=none` installs claude-code and pins the transitive tree to the age window.
+- `--allow-scripts @anthropic-ai/claude-code` is required — claude-code has a first-party `postinstall: node install.cjs` (confirmed on 2.1.169); this permits only its own script and blocks all transitive-dep scripts.
+- `--min-release-age` selects the latest `@latest` dist-tag version older than `COOLDOWN_DAYS` days; no explicit `@VERSION` pin needed at install time.
+- Claude Code ships frequently (daily releases); without `--min-release-age`, `@latest` would resolve to a post-cooldown version.
+- The native installer at `https://claude.ai/install.sh` (or `npx @anthropic-ai/claude-code`) runs interactively and cannot enforce a transitive age window.
+- `npm install -g @anthropic-ai/claude-code` with `--min-release-age` is the correct containerized approach (no interactive prompts, reproducible, version recorded post-build in versions.lock)
 
 ### Runtime Configuration
 
@@ -210,9 +211,10 @@ A reproducible, network-isolated development sandbox — built as an NVIDIA Open
 
 | Recommended | Alternative | Why Not |
 |-------------|-------------|---------|
-| `npm install -g pkg@VERSION --before=DATE` | pnpm/yarn date pinning | Neither pnpm nor yarn has an equivalent `--before` that pins transitive deps; yarn resolutions only pin direct deps |
-| `npm install -g pkg@VERSION --before=DATE` | Committing `package-lock.json` | Works but is cumbersome for rolling cooldown: requires re-running `npm install --before` and committing a new lockfile each rebuild |
-| `npm install -g pkg@VERSION --before=DATE` | Registry time-travel proxy (Verdaccio `--snapshot`) | Verdaccio snapshot support exists but adds operational complexity; npm `--before` is sufficient and built-in |
+| `npm install -g pkg --min-release-age=N` (npm 11 native cooldown) | `npm install -g pkg@VERSION --before=DATE` (pre-resolved pin) | Both work; `--min-release-age` is simpler (no host-side npm registry query needed) and keeps the rolling cooldown fully automated. govulncheck still uses Go-proxy date selection because it is not an npm package. |
+| `npm install -g pkg --min-release-age=N` | pnpm/yarn date pinning | Neither pnpm nor yarn has an equivalent age-window flag that pins transitive deps |
+| `npm install -g pkg --min-release-age=N` | Committing `package-lock.json` | Works but is cumbersome for rolling cooldown: requires re-running install and committing a new lockfile each rebuild |
+| `npm install -g pkg --min-release-age=N` | Registry time-travel proxy (Verdaccio `--snapshot`) | Verdaccio snapshot support exists but adds operational complexity; npm `--min-release-age` is sufficient and built-in |
 | `go install pkg@vX.Y.Z` (explicit tag) | `go install pkg@latest` | `@latest` ignores cooldown; always use explicit tag computed from Go proxy timestamps |
 | `openshell sandbox create --policy ./policy.yaml` (empty `network_policies`) | `openshell policy update --add-endpoint ...` post-create | Policy must be set at create time for static sections; zero-egress requires empty `network_policies` from the start |
 | Podman driver | Docker driver | Gateway config already uses Podman; switching to Docker driver would require config change; both support bind mounts with `enable_bind_mounts` |
@@ -222,7 +224,10 @@ A reproducible, network-isolated development sandbox — built as an NVIDIA Open
 
 | Avoid | Why | Use Instead |
 |-------|-----|-------------|
-| `npx @opengsd/gsd-core@latest --claude --global` without version pin | `npx` does not support `--before`; `@latest` resolves to post-cooldown version | `npm install -g @opengsd/gsd-core@1.4.0 --before=2026-06-09 && gsd-core --claude --global` |
+| `npx @opengsd/gsd-core@latest --claude --global` | `npx` does not support `--min-release-age`; `@latest` resolves to whatever is current | `npm install -g @opengsd/gsd-core --min-release-age=${COOLDOWN_DAYS} --ignore-scripts ... && gsd-core --claude --global` |
+| npm install without `--ignore-scripts` for gsd-core | gsd-core 1.4.0 has no install scripts; omitting the flag relies on npm's implicit warn-and-skip default which may change across npm versions | `--ignore-scripts` (explicit and durable) |
+| npm install without `--allow-scripts @anthropic-ai/claude-code` for claude-code | claude-code requires its first-party `postinstall: node install.cjs`; omitting the flag may fail silently if npm defaults change | `--allow-scripts @anthropic-ai/claude-code` (permits only first-party script) |
+| npm install without `--allow-git=none --allow-remote=none --allow-directory=none` | These flags default to `all` (permissive); omitting them leaves git-ref, tarball-URL, and local-directory dependency sources allowed — only registry semver ranges are acceptable in a supply-chain-hardened sandbox | Pass `--allow-git=none --allow-remote=none --allow-directory=none` on every npm install |
 | `claude --allow-dangerously-skip-permissions` | Prompts the user on each risky action; designed for interactive opt-in not autonomous operation | `claude --dangerously-skip-permissions` |
 | `ANTHROPIC_BASE_URL=https://inference.local/v1` | Claude Code appends `/v1/messages`; adding `/v1` in the base URL creates `/v1/v1/messages` (double path) | `ANTHROPIC_BASE_URL=https://inference.local` (no trailing `/v1`) |
 | `--from-existing` provider flag in Dockerfile | Reads from host keychain/environment, not available inside container build | Set credentials via `openshell provider create` on the host before sandbox creation |

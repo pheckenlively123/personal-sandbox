@@ -95,6 +95,7 @@ Plan: 2 of 2
 | 260619-e0p | Architecture B-hardened redesign: verb-first rebuild.sh, subscription OAuth login, api.anthropic.com-only TLS-passthrough egress (claude-binary-scoped), inverted NET gates; removed inference.local/--model machinery | 2026-06-19 | 4f99856 | [260619-e0p-implement-architecture-b-hardened-rebuil](./quick/260619-e0p-implement-architecture-b-hardened-rebuil/) |
 | 260619-eow | Revert npm cooldown --min-release-age → --before + explicit pins (image npm too old for --min-release-age; it silently installed @latest → verify-pins PIN-07 failed) | 2026-06-19 | e9b05a2 | [260619-eow-revert-npm-cooldown-to-before-mechanism](./quick/260619-eow-revert-npm-cooldown-to-before-mechanism/) |
 | fast | rebuild.sh: tolerate wrapped "sandbox not found" in idempotent teardown (openshell miette line-wraps the phrase) | 2026-06-19 | d03d324 | — |
+| 260619-fbi | Add claude.ai + platform.claude.com to egress allowlist (subscription OAuth needs them, not just api.anthropic.com); ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1; NET-04 checks 3 hosts; NET-05 deny-posture-only (curl can't test binary-scoped allows) | 2026-06-19 | a6c8e83 | [260619-fbi-add-claude-auth-hosts-to-egress-allowlis](./quick/260619-fbi-add-claude-auth-hosts-to-egress-allowlis/) |
 
 ---
 

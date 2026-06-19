@@ -1,6 +1,6 @@
-# policy.yaml — OpenShell sandbox Landlock filesystem policy
+# policy.yaml — OpenShell sandbox policy
 # Source: the live built-in default policy (`openshell policy get <sb> --full -o json`),
-# extended with /claudeshared.
+# extended with /claudeshared and the api.anthropic.com:443 passthrough allow.
 #
 # This file is passed to `openshell sandbox create --policy ./policy.yaml`.
 # IMPORTANT: `--policy` OVERRIDES the built-in default policy entirely — it does NOT
@@ -12,8 +12,10 @@
 # OpenShell supervisor needs to set up its network namespace, causing the sandbox
 # to fail provisioning with "Permission denied (os error 13)".
 #
-# Egress policy (zero-egress enforcement) is intentionally deferred to Phase 3.
-# Do not add a network section here.
+# Architecture B (hardened): single api.anthropic.com:443 passthrough allow, binary-scoped
+# to the claude executable. No protocol field = opaque TCP/TLS passthrough (proxy never
+# decrypts the OAuth stream). statsig.anthropic.com and sentry.io are intentionally absent
+# to minimize telemetry/exfil surface. All other egress remains denied.
 version: 1
 
 filesystem_policy:
@@ -38,3 +40,31 @@ landlock:
 process:
   run_as_group: sandbox
   run_as_user: sandbox
+
+# Network egress policy — Architecture B (hardened to api.anthropic.com-only direct egress).
+#
+# Allows ONLY api.anthropic.com:443 as an opaque TLS passthrough, restricted to the claude
+# binary. Omitting `protocol` is mandatory — it produces an opaque TCP/TLS passthrough stream
+# (the proxy never terminates TLS or decrypts the OAuth bearer token). Using `protocol: rest`
+# would terminate TLS and expose the subscription token, and is explicitly NOT used here.
+# Reference: docs/reference/policy-schema.mdx:158, docs/sandboxes/policies.mdx:59.
+#
+# `binaries:` scope: only /usr/bin/claude and /usr/local/bin/claude may open connections to
+# api.anthropic.com. Claude Code (a Node.js script) is matched via the ancestor/declared-path
+# logic in the OPA engine (opa.rs:42-53, test ancestor_binary_allowed at :1477-1500). Both
+# candidate paths are listed for robustness (npm global bin on Fedora RPM nodejs is /usr/bin;
+# /usr/local/bin/claude is also listed in case of a non-standard npm prefix).
+#
+# statsig.anthropic.com and sentry.io are intentionally omitted (no telemetry/error-reporting
+# egress). If Claude Code shows degraded behavior, adding statsig.anthropic.com:443 as a
+# passthrough entry here (same shape, same binaries scope) is the minimal follow-up.
+network_policies:
+  anthropic_api:
+    name: anthropic-api
+    endpoints:
+      - host: api.anthropic.com
+        port: 443
+        # NO protocol field -> opaque TCP/TLS passthrough; proxy never decrypts the OAuth stream.
+    binaries:
+      - { path: /usr/bin/claude }
+      - { path: /usr/local/bin/claude }

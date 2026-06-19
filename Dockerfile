@@ -103,6 +103,8 @@ RUN groupadd -g 1000 sandbox \
     && useradd -m -u 1000 -g sandbox -s /bin/bash --no-log-init sandbox
 
 # Runtime entry point: Claude Code with dangerously-skip-permissions and plugin dir.
-# ANTHROPIC_BASE_URL has no trailing /v1 (CLAUDE.md "What NOT to Use").
-ENV ANTHROPIC_BASE_URL=https://inference.local
+# Architecture B: ANTHROPIC_BASE_URL is NOT set — Claude Code uses its built-in default
+# (api.anthropic.com) and authenticates via in-sandbox subscription OAuth login.
+# The operator runs `./rebuild.sh login` to complete the OAuth flow after sandbox creation.
+# Do NOT add --bare: that flag skips OAuth and requires ANTHROPIC_API_KEY, which we do not use.
 CMD ["claude", "--dangerously-skip-permissions", "--plugin-dir", "/opt/claude-engineering-toolkit"]

@@ -2,37 +2,46 @@
 # rebuild.sh — Idempotent top-level orchestrator for the claude-sandbox lifecycle.
 #
 # Usage:
-#   ./rebuild.sh [--cooldown-days N] [--model <id>]
-#   ./rebuild.sh --set-model <id>
-#   ./rebuild.sh --audit
+#   ./rebuild.sh [rebuild] [--cooldown-days N]   # Full clean rebuild (default)
+#   ./rebuild.sh status                           # Status summary (read-only)
+#   ./rebuild.sh connect                          # Attach to running sandbox shell
+#   ./rebuild.sh login                            # Connect + launch Claude OAuth login flow
+#   ./rebuild.sh down                             # Delete sandbox (idempotent)
+#   ./rebuild.sh audit [--since <ts>]             # Surface openshell logs
 #
-# Steps (normal mode):
-#   0. Ensure inference provider — idempotently create-or-update the claude-code
-#      provider and set the gateway model (--model, default claude-opus-4-8)
+# Architecture B — hardened to api.anthropic.com-only direct egress:
+#   - Claude Code runs INSIDE the sandbox and connects DIRECTLY to api.anthropic.com:443
+#   - Subscription OAuth login: `./rebuild.sh login` → open URL in browser OUTSIDE the
+#     sandbox → paste the returned code into the in-sandbox prompt. One-time per session.
+#   - No inference.local gateway. No ANTHROPIC_API_KEY. No host-side provider setup.
+#   - The sandbox policy allows ONLY api.anthropic.com:443 (TLS passthrough, binary-scoped
+#     to /usr/bin/claude and /usr/local/bin/claude). All other egress is denied.
+#   - On-the-fly model selection via Claude's native /model command (Opus/Sonnet/Haiku).
+#
+# Steps (rebuild verb):
 #   1. Preflight — verify required tools are on PATH
 #   2. Resolve cooldown versions and build container image (delegates to build-and-lock.sh)
 #   3. Tag :latest alias
 #   4. Teardown existing sandbox and images (tolerate-absent — idempotent)
 #   5. Create sandbox with ~/claudeshared bind mount and policy.yaml
-#
-# Subcommands:
-#   --audit       Surface openshell logs for claude-sandbox without rebuilding (BLD-05)
-#   --set-model   Configure inference provider + gateway model only, then exit (no rebuild)
+#   6. NET-04: Assert effective live policy = anthropic-only passthrough, claude-scoped,
+#      no statsig.anthropic.com, no sentry.io (FATAL)
+#   7. NET-05: In-sandbox curl — api.anthropic.com REACHABLE; statsig.anthropic.com,
+#      sentry.io, www.google.com BLOCKED (FATAL)
 #
 # Decisions:
 #   D-01: Full clean rebuild every run (tear down existing sandbox + images before create)
 #   D-02: Tolerate-absent teardown — absent sandbox/images are not errors
 #   D-03: Tag :latest alias after date-pinned build
 #   D-05: Subprocess delegation — rebuild.sh does not re-implement version resolution
-#   D-06: Timestamped per-phase banners for phases this script controls
-#   D-07: --audit is log-surfacing only; never asserts egress policy (Phase 3)
+#   D-07: audit verb is log-surfacing only; never asserts policy
 
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ---------------------------------------------------------------------------
-# Logging helpers (BLD-04 / D-06)
+# Logging helpers (BLD-04 / D-07)
 # ---------------------------------------------------------------------------
 ts() { python3 -c "from datetime import datetime,timezone; print(datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))"; }
 
@@ -44,242 +53,168 @@ log_info()  { echo "INFO: $1" >&2; }
 log_error() { echo "ERROR: $1" >&2; }
 
 # ---------------------------------------------------------------------------
-# Inference provider create-or-update (NET-03 / D-04)
+# Portable podman readiness (Finding 8 — machine-detect + systemctl fallback)
 # ---------------------------------------------------------------------------
-# Idempotently ensures the claude-code inference provider exists and the gateway
-# model is set to ${MODEL}. Called at Step 0 of a full rebuild and by --set-model.
-#
-# The OpenShell gateway hard-overrides the model for all requests it routes —
-# one model per gateway, by design. To switch models without a full rebuild, use:
-#   ./rebuild.sh --set-model <id>
-# then start a NEW Claude session so Claude Code picks up the new model.
-#
-# Steps:
-#   1. Podman autostart — ensure the podman machine is running (gateway requires it).
-#   2. Provider create-or-update — detect existence via `openshell provider get`;
-#      create if absent, update if present (re-syncs the --from-existing OAuth token).
-#      `--from-existing` reads ~/.claude/.credentials.json / macOS keychain (host OAuth).
-#      Failure means the operator is not logged into Claude Code on the host → exit 1.
-#   3. Set gateway model — `openshell inference set --provider claude-code --model`.
-ensure_inference_provider() {
-    # --- Step 1: Podman autostart ---
-    local podman_state rc_inspect=0
-    podman_state=$(podman machine inspect --format '{{.State}}' 2>/dev/null) || rc_inspect=$?
-    if [[ ${rc_inspect} -ne 0 || "${podman_state}" != "running" ]]; then
-        log_info "Podman machine not running (state=${podman_state:-unknown}); starting..."
-        podman machine start
-        # Re-check after start
-        local rc_recheck=0
-        podman_state=$(podman machine inspect --format '{{.State}}' 2>/dev/null) || rc_recheck=$?
-        if [[ ${rc_recheck} -ne 0 || "${podman_state}" != "running" ]]; then
-            log_error "Podman machine failed to start (state=${podman_state:-unknown})."
-            log_error "Try: podman machine start"
-            exit 1
-        fi
-    fi
-    log_info "Podman machine is running"
+# Detects whether we are on a machine-based host (macOS) or a native Linux host.
+# macOS: podman machine inspect/start path.
+# Linux/Fedora: systemctl --user start podman.socket (best effort).
+# Either way, `podman info` is the final readiness gate.
+ensure_podman_ready() {
+    local machine_list
+    machine_list=$(podman machine list --format '{{.Name}}' 2>/dev/null || true)
 
-    # Verify the OpenShell gateway is reachable before provider operations
-    local gw_rc=0
-    openshell inference get >/dev/null 2>&1 || gw_rc=$?
-    if [[ ${gw_rc} -ne 0 ]]; then
-        log_error "OpenShell inference gateway unreachable after podman start (openshell inference get exited ${gw_rc})."
-        log_error "Try: podman machine start; openshell inference get"
-        exit 1
-    fi
-
-    # --- Step 2: Provider create-or-update ---
-    local provider_rc=0
-    openshell provider get claude-code >/dev/null 2>&1 || provider_rc=$?
-    if [[ ${provider_rc} -ne 0 ]]; then
-        log_info "Provider claude-code not found — creating..."
-        local create_out create_rc=0
-        create_out=$(openshell provider create --name claude-code --type claude-code --from-existing 2>&1) || create_rc=$?
-        if [[ ${create_rc} -ne 0 ]]; then
-            # Tolerate AlreadyExists (race or prior partial run)
-            if echo "${create_out}" | grep -qi "AlreadyExists\|already exists"; then
-                log_info "Provider claude-code already exists (tolerated AlreadyExists on create)"
-            else
-                log_error "openshell provider create failed (exit ${create_rc}): ${create_out}"
-                log_error "Ensure you are logged into Claude Code on the host: run 'claude' once to authenticate."
-                log_error "--from-existing reads ~/.claude/.credentials.json / macOS keychain (OAuth, no API key)."
+    if [[ -n "${machine_list}" ]]; then
+        # macOS / machine-based host
+        local podman_state rc_inspect=0
+        podman_state=$(podman machine inspect --format '{{.State}}' 2>/dev/null) || rc_inspect=$?
+        if [[ ${rc_inspect} -ne 0 || "${podman_state}" != "running" ]]; then
+            log_info "Podman machine not running (state=${podman_state:-unknown}); starting..."
+            podman machine start
+            local rc_recheck=0
+            podman_state=$(podman machine inspect --format '{{.State}}' 2>/dev/null) || rc_recheck=$?
+            if [[ ${rc_recheck} -ne 0 || "${podman_state}" != "running" ]]; then
+                log_error "Podman machine failed to start (state=${podman_state:-unknown})."
+                log_error "Try: podman machine start"
                 exit 1
             fi
-        else
-            log_info "Provider claude-code created"
         fi
+        log_info "Podman machine is running"
     else
-        log_info "Provider claude-code exists — updating credentials (--from-existing)..."
-        local update_out update_rc=0
-        update_out=$(openshell provider update claude-code --from-existing 2>&1) || update_rc=$?
-        if [[ ${update_rc} -ne 0 ]]; then
-            log_error "openshell provider update failed (exit ${update_rc}): ${update_out}"
-            log_error "Ensure you are logged into Claude Code on the host: run 'claude' once to authenticate."
-            log_error "--from-existing reads ~/.claude/.credentials.json / macOS keychain (OAuth, no API key)."
-            exit 1
-        fi
-        log_info "Provider claude-code credentials refreshed"
+        # Native Linux / Fedora host — start the user socket (best effort; may already be active)
+        systemctl --user start podman.socket 2>/dev/null || true
+        log_info "Podman socket start attempted (Linux native host)"
     fi
 
-    # --- Step 3: Set gateway model ---
-    log_info "Setting gateway model to ${MODEL}..."
-    local set_out set_rc=0
-    set_out=$(openshell inference set --provider claude-code --model "${MODEL}" 2>&1) || set_rc=$?
-    if [[ ${set_rc} -ne 0 ]]; then
-        log_error "openshell inference set failed (exit ${set_rc}): ${set_out}"
+    # Final gate regardless of platform
+    if ! podman info >/dev/null 2>&1; then
+        log_error "Podman is not ready (podman info failed)."
+        log_error "On Linux: systemctl --user start podman.socket (may need: loginctl enable-linger \$USER)"
+        log_error "On macOS: podman machine start"
         exit 1
     fi
-    log_info "Gateway model set to ${MODEL}"
+    log_info "Podman is ready"
 }
 
 # ---------------------------------------------------------------------------
-# Provider existence preflight (D-03/NET-03)
+# NET-04 live policy assertion — anthropic-only passthrough, claude-scoped (Finding 5)
 # ---------------------------------------------------------------------------
-# openshell inference get exits 0 when the gateway is reachable (configured OR
-# "Not configured"), but exits NON-ZERO on a transport error (gateway/podman down
-# → "Connection refused"). Under `set -euo pipefail` the line-50 command
-# substitution must tolerate that non-zero (|| rc=$?) or it aborts the whole
-# script silently before the grep. Three states are distinguished: unreachable
-# (rc!=0), not-configured, configured.
-#
-# `openshell inference get` prints TWO routes: "Gateway inference:" (the
-# user-facing route that inference.local — and thus Claude Code — uses) and
-# "System inference:" (the sandbox-system route, used only by platform/agent-harness
-# functions and never by user code). We configure only the gateway route, so
-# "System inference: Not configured" persists; checking it would falsely fail.
-# Therefore inspect ONLY the Gateway inference section. (Confirmed against
-# OpenShell source: run.rs prints both routes; --system selects sandbox-system.)
-check_inference_provider() {
-    local output rc=0
-    output=$(openshell inference get 2>&1 | sed 's/\x1B\[[0-9;]*[mK]//g') || rc=$?
-
-    if [[ ${rc} -ne 0 ]]; then
-        log_error "Could not reach the OpenShell inference gateway (openshell inference get exited ${rc})."
-        log_error "The podman/gateway backend may be down. Try: podman machine start"
-        log_error "Detail: ${output}"
-        exit 1
-    fi
-
-    # Isolate the Gateway inference block (lines after "Gateway inference:" up to
-    # but not including "System inference:"); the system route is intentionally ignored.
-    local gateway_block
-    gateway_block=$(printf '%s\n' "${output}" | awk '
-        /^Gateway inference:/ {cap=1; next}
-        /^System inference:/  {cap=0}
-        cap {print}
-    ')
-    if printf '%s\n' "${gateway_block}" | grep -qE "Not configured|Error:"; then
-        log_error "Inference provider is not configured — sandbox create would hang ~290s."
-        log_error "One-time setup (operator action, see README):"
-        log_error "  openshell provider create --name claude-code --type claude-code --from-existing"
-        log_error "  openshell inference set --provider claude-code --model <MODEL>"
-        exit 1
-    fi
-    log_info "Inference provider configured — preflight passed"
-}
-
-# ---------------------------------------------------------------------------
-# NET-04 live policy assertion (Step 5 / D-02)
-# ---------------------------------------------------------------------------
-# Query the live sandbox policy (not the static policy.yaml) and abort if any
-# direct Anthropic endpoint is present. jq -e exits 0 on match (VIOLATION),
-# non-zero on no match (PASS) — inverted sense per verify-pins.sh discipline.
-# The '// {}' guard handles the absent network_policies field (correct deny-all
-# state where the key does not appear in the JSON at all).
-assert_no_anthropic_egress() {
+# Asserts the live effective sandbox policy:
+#   PASS requires: api.anthropic.com:443 present, no `protocol` field (passthrough),
+#                  binaries[].path matches */claude, statsig.anthropic.com ABSENT,
+#                  sentry.io ABSENT, no protocol:rest on any Anthropic endpoint.
+#   FAIL on any violation — fatal (exit 1).
+assert_anthropic_only_egress() {
     local sandbox_name="${1}"
     local policy_json
     policy_json=$(openshell policy get "${sandbox_name}" --full -o json 2>&1)
 
-    # jq -e exits 0 if a matching entry is found (VIOLATION), non-zero if no match (PASS)
-    if echo "${policy_json}" | jq -e \
-        '.policy.network_policies // {} | to_entries[] | .value.endpoints[]? | select(.host | test("anthropic"; "i"))' \
+    # --- Require api.anthropic.com:443 to be present ---
+    if ! echo "${policy_json}" | jq -e \
+        '.policy.network_policies // {} | to_entries[] | .value.endpoints[]? | select(.host == "api.anthropic.com" and .port == 443)' \
         >/dev/null 2>&1; then
-        log_error "NET-04 VIOLATION: Direct Anthropic endpoint found in effective policy!"
+        log_error "NET-04 VIOLATION: api.anthropic.com:443 NOT found in effective policy — passthrough allow missing!"
         log_error "Policy output: ${policy_json}"
         exit 1
     fi
-    log_info "NET-04 PASS: No direct Anthropic endpoints in effective policy"
+    log_info "NET-04: api.anthropic.com:443 present in policy"
+
+    # --- Require NO protocol field on api.anthropic.com (passthrough = omit protocol) ---
+    if echo "${policy_json}" | jq -e \
+        '.policy.network_policies // {} | to_entries[] | .value.endpoints[]? | select(.host == "api.anthropic.com") | select(.protocol != null)' \
+        >/dev/null 2>&1; then
+        log_error "NET-04 VIOLATION: api.anthropic.com endpoint has a 'protocol' field — must be omitted for TLS passthrough!"
+        log_error "Policy output: ${policy_json}"
+        exit 1
+    fi
+    log_info "NET-04: api.anthropic.com endpoint has no 'protocol' field (opaque passthrough confirmed)"
+
+    # --- Require at least one binary scoped to */claude ---
+    if ! echo "${policy_json}" | jq -e \
+        '.policy.network_policies // {} | to_entries[] | .value | select(.endpoints[]? | .host == "api.anthropic.com") | .binaries[]? | select(.path | test(".*/claude$"))' \
+        >/dev/null 2>&1; then
+        log_error "NET-04 VIOLATION: api.anthropic.com policy has no binary entry matching */claude!"
+        log_error "Policy output: ${policy_json}"
+        exit 1
+    fi
+    log_info "NET-04: Binary-scoped to claude confirmed"
+
+    # --- Require statsig.anthropic.com ABSENT ---
+    if echo "${policy_json}" | jq -e \
+        '.policy.network_policies // {} | to_entries[] | .value.endpoints[]? | select(.host | test("statsig"; "i"))' \
+        >/dev/null 2>&1; then
+        log_error "NET-04 VIOLATION: statsig.anthropic.com found in effective policy — must be absent!"
+        log_error "Policy output: ${policy_json}"
+        exit 1
+    fi
+    log_info "NET-04: statsig.anthropic.com absent (telemetry blocked)"
+
+    # --- Require sentry.io ABSENT ---
+    if echo "${policy_json}" | jq -e \
+        '.policy.network_policies // {} | to_entries[] | .value.endpoints[]? | select(.host | test("sentry"; "i"))' \
+        >/dev/null 2>&1; then
+        log_error "NET-04 VIOLATION: sentry.io found in effective policy — must be absent!"
+        log_error "Policy output: ${policy_json}"
+        exit 1
+    fi
+    log_info "NET-04: sentry.io absent (error-reporting blocked)"
+
+    log_info "NET-04 PASS: api.anthropic.com:443 passthrough, claude-scoped; statsig+sentry absent"
 }
 
 # ---------------------------------------------------------------------------
-# NET-05 egress smoke test (Step 6 / D-05)
+# NET-05 egress smoke test — inverted gates (Finding 5)
 # ---------------------------------------------------------------------------
-# Run curl from inside the running sandbox. PASS condition is curl exit != 0
-# (proxy blocks the connection). Any exit 0 (connection succeeded) is a hard
-# violation — zero-egress is broken. Tests two independent targets: a specific
-# Anthropic endpoint and a generic endpoint to prove deny-all (T-03-02).
-# Every openshell invocation below redirects stderr (2>/dev/null) to suppress
-# the non-fatal ".bash_profile: Permission denied" noise (Pitfall 4 / RESEARCH.md).
+# api.anthropic.com   → must be REACHABLE (any HTTP status = PASS; connect-refused = FAIL)
+# statsig.anthropic.com → must be BLOCKED (curl connect failure = PASS; any connect = FAIL)
+# sentry.io             → must be BLOCKED
+# www.google.com        → must be BLOCKED (proves deny-all-except-allowlist)
+#
+# Uses `curl -sS -o /dev/null -w '%{http_code}' --max-time 8`.
+# For anthropic: any non-empty HTTP status string (including 4xx/5xx) = proxy allowed stream = PASS.
+# For blocked targets: curl exit 7/35/28-class or empty status = proxy denied = PASS.
 run_egress_smoke_test() {
     local sandbox_name="${1}"
-    local -a targets=("https://api.anthropic.com" "https://example.com")
 
-    for target in "${targets[@]}"; do
-        local rc=0
-        openshell sandbox exec --name "${sandbox_name}" --no-tty -- curl --max-time 8 --silent "${target}" 2>/dev/null || rc=$?
+    # --- api.anthropic.com must be REACHABLE ---
+    local anthropic_rc=0 anthropic_status=""
+    anthropic_status=$(openshell sandbox exec --name "${sandbox_name}" --no-tty \
+        -- curl -sS -o /dev/null -w '%{http_code}' --max-time 8 \
+        "https://api.anthropic.com" 2>/dev/null) || anthropic_rc=$?
 
-        if [[ ${rc} -eq 0 ]]; then
-            log_error "NET-05 VIOLATION: Egress to ${target} SUCCEEDED — zero-egress is broken!"
+    if [[ ${anthropic_rc} -ne 0 || -z "${anthropic_status}" || "${anthropic_status}" == "000" ]]; then
+        log_error "NET-05 VIOLATION: api.anthropic.com is BLOCKED (curl exit ${anthropic_rc}, status='${anthropic_status}')"
+        log_error "The network policy passthrough to api.anthropic.com:443 is not active!"
+        exit 1
+    fi
+    log_info "NET-05 PASS: api.anthropic.com reachable (HTTP ${anthropic_status})"
+
+    # --- Blocked targets: each must fail to connect ---
+    local -a blocked_targets=("https://statsig.anthropic.com" "https://sentry.io" "https://www.google.com")
+    for target in "${blocked_targets[@]}"; do
+        local rc=0 status=""
+        status=$(openshell sandbox exec --name "${sandbox_name}" --no-tty \
+            -- curl -sS -o /dev/null -w '%{http_code}' --max-time 8 \
+            "${target}" 2>/dev/null) || rc=$?
+
+        if [[ ${rc} -eq 0 && -n "${status}" && "${status}" != "000" ]]; then
+            log_error "NET-05 VIOLATION: Egress to ${target} SUCCEEDED (HTTP ${status}) — deny-all is broken!"
             exit 1
         fi
-        log_info "NET-05 PASS: ${target} blocked (curl exit ${rc})"
+        log_info "NET-05 PASS: ${target} blocked (curl exit ${rc}, status='${status}')"
     done
+
+    log_info "NET-05 PASS: All blocked targets confirmed denied; api.anthropic.com reachable"
 }
 
 # ---------------------------------------------------------------------------
-# D-06 inference round-trip (Step 7, non-fatal)
-# ---------------------------------------------------------------------------
-# Fires a single model round-trip through inference.local from inside the
-# sandbox and reports PASS or WARN — never blocks the rebuild (non-fatal gate).
-#
-# Success is detected by parsing the JSON body (.content | length > 0), NOT
-# the curl exit code (which is 0 even on a gateway error body — Pitfall 2
-# from RESEARCH.md). The placeholder x-api-key is never a real credential;
-# the OpenShell gateway injects the real subscription token host-side (NET-03).
-#
-# The URL is https://inference.local/v1/messages (single /v1 path). Do NOT
-# use inference.local/v1/v1 — that double-path anti-pattern is listed in
-# CLAUDE.md "What NOT to Use" and verified via acceptance check.
-#
-# Uses || rc=$? (not bare || true) so the exit code is available for branching.
-# return 0 on every warn path — no exit, no set -e abort.
-run_inference_round_trip() {
-    local sandbox_name="${1}"
-    local response rc=0
-
-    response=$(openshell sandbox exec --name "${sandbox_name}" --no-tty \
-        -- curl --max-time 30 --silent \
-        -X POST https://inference.local/v1/messages \
-        -H "Content-Type: application/json" \
-        -H "x-api-key: placeholder" \
-        -d '{"model":"any","max_tokens":10,"messages":[{"role":"user","content":"ping"}]}' \
-        2>/dev/null) || rc=$?
-
-    if [[ ${rc} -ne 0 ]]; then
-        log_info "D-06 WARN: curl failed (rc=${rc}) — inference path unverified (non-fatal)"
-        ROUND_TRIP_STATUS="WARN (curl exit ${rc})"
-        return 0
-    fi
-    if echo "${response}" | jq -e '.content | length > 0' >/dev/null 2>&1; then
-        log_info "D-06 PASS: inference.local returned a model response"
-        ROUND_TRIP_STATUS="PASS"
-    else
-        local err
-        err=$(echo "${response}" | jq -r '.error // "unknown"' 2>/dev/null || echo "${response}")
-        log_info "D-06 WARN: inference.local error: ${err} (non-fatal — see README for provider setup)"
-        ROUND_TRIP_STATUS="WARN (${err})"
-    fi
-}
-
-# ---------------------------------------------------------------------------
-# Audit subcommand (BLD-05 / D-07 — log-surfacing only)
+# Audit verb (D-07 — log-surfacing only)
 # ---------------------------------------------------------------------------
 audit_sandbox() {
     local name="${1:-claude-sandbox}"
     local since="${2:-}"
     local since_arg=""
-    [[ -n "$since" ]] && since_arg="--since ${since}"
+    [[ -n "${since}" ]] && since_arg="--since ${since}"
+    # shellcheck disable=SC2086
     openshell logs "${name}" ${since_arg} --source all
 }
 
@@ -288,14 +223,33 @@ audit_sandbox() {
 # ---------------------------------------------------------------------------
 COOLDOWN_DAYS=4
 SANDBOX_NAME="claude-sandbox"
-AUDIT_MODE=false
-ROUND_TRIP_STATUS="NOT RUN"
-MODEL="claude-opus-4-8"
-SET_MODEL_MODE=false
+VERB="rebuild"    # default verb
 
 # ---------------------------------------------------------------------------
-# Argument parsing (mirror build-and-lock.sh two-form style)
+# Verb-first argument parsing
 # ---------------------------------------------------------------------------
+# Accept positional verb as first argument; flags follow.
+if [[ $# -gt 0 ]]; then
+    case "$1" in
+        rebuild|status|connect|login|down|audit)
+            VERB="$1"
+            shift
+            ;;
+        --cooldown-days|--cooldown-days=*|--audit)
+            # Backward-compat: flag-first form with no explicit verb → verb=rebuild
+            VERB="rebuild"
+            ;;
+        *)
+            log_error "Unknown verb or argument: $1"
+            echo "Usage: $0 [rebuild|status|connect|login|down|audit] [--cooldown-days N]" >&2
+            echo "       $0 [--cooldown-days N]   (shorthand for rebuild)" >&2
+            echo "       $0 --audit               (shorthand for audit verb)" >&2
+            exit 1
+            ;;
+    esac
+fi
+
+AUDIT_SINCE=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --cooldown-days)
@@ -311,96 +265,140 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --audit)
-            AUDIT_MODE=true
+            # Backward-compat alias: treat as the audit verb redirect
+            VERB="audit"
             shift
             ;;
-        --model)
+        --since)
             if [[ -z "${2-}" ]]; then
-                log_error "--model requires an argument"
+                log_error "--since requires an argument"
                 exit 1
             fi
-            MODEL="$2"
+            AUDIT_SINCE="$2"
             shift 2
             ;;
-        --model=*)
-            MODEL="${1#--model=}"
-            shift
-            ;;
-        --set-model)
-            if [[ -z "${2-}" ]]; then
-                log_error "--set-model requires an argument"
-                exit 1
-            fi
-            MODEL="$2"
-            SET_MODEL_MODE=true
-            shift 2
-            ;;
-        --set-model=*)
-            MODEL="${1#--set-model=}"
-            SET_MODEL_MODE=true
+        --since=*)
+            AUDIT_SINCE="${1#--since=}"
             shift
             ;;
         *)
             log_error "Unknown argument: $1"
-            echo "Usage: $0 [--cooldown-days N] [--model <id>]" >&2
-            echo "       $0 --set-model <id>" >&2
-            echo "       $0 --audit" >&2
+            echo "Usage: $0 [rebuild|status|connect|login|down|audit] [--cooldown-days N]" >&2
             exit 1
             ;;
     esac
 done
 
 # ---------------------------------------------------------------------------
-# Model-id allowlist validation (injection guard — mirrors T-02-01 BUILD_DATE pattern)
+# Preflight: verify required tools are on PATH (fail-closed; skip for connect/login/down)
 # ---------------------------------------------------------------------------
-# MODEL flows into an openshell CLI argument; validate before it reaches any command.
-# Pattern mirrors scripts/build-and-lock.sh:69-73 allowlist style.
-if ! [[ "${MODEL}" =~ ^claude-[A-Za-z0-9._-]+$ ]]; then
-    log_error "Invalid model id: '${MODEL}'"
-    log_error "Model id must match ^claude-[A-Za-z0-9._-]+$ (e.g. claude-opus-4-8, claude-sonnet-4-5)"
-    exit 1
-fi
+preflight_tools() {
+    for cmd in podman openshell python3 jq; do
+        if ! command -v "${cmd}" >/dev/null 2>&1; then
+            log_error "Required tool not found on PATH: ${cmd}"
+            exit 1
+        fi
+    done
+    log_info "Preflight passed — all required tools found"
+}
 
 # ---------------------------------------------------------------------------
-# --audit subcommand: surface logs and exit without building (BLD-05)
+# Verb dispatch
 # ---------------------------------------------------------------------------
-if [[ "${AUDIT_MODE}" == "true" ]]; then
-    log_info "Surfacing openshell logs for ${SANDBOX_NAME} (--audit mode — no build/teardown/create)"
-    audit_sandbox "${SANDBOX_NAME}"
-    exit 0
-fi
 
-# ---------------------------------------------------------------------------
-# Preflight: verify required tools are on PATH (fail-closed)
-# ---------------------------------------------------------------------------
-for cmd in podman openshell python3 jq; do
-    if ! command -v "${cmd}" >/dev/null 2>&1; then
-        log_error "Required tool not found on PATH: ${cmd}"
+case "${VERB}" in
+
+    # -----------------------------------------------------------------------
+    # status — read-only summary (podman + openshell + sandbox + effective policy)
+    # -----------------------------------------------------------------------
+    status)
+        preflight_tools
+        log_info "=== Status summary (read-only) ==="
+        log_info "Checking podman..."
+        podman info --format 'Host: {{.Host.OS}}/{{.Host.Arch}}, Store: {{.Store.GraphDriver}}' 2>/dev/null \
+            || log_info "  podman not ready"
+        log_info "Checking sandbox ${SANDBOX_NAME}..."
+        openshell sandbox list --names 2>/dev/null | grep "^${SANDBOX_NAME}$" \
+            && log_info "  Sandbox ${SANDBOX_NAME}: EXISTS" \
+            || log_info "  Sandbox ${SANDBOX_NAME}: not found"
+        log_info "Checking effective policy (if sandbox exists)..."
+        openshell policy get "${SANDBOX_NAME}" --full -o json 2>/dev/null \
+            | jq '.policy.network_policies // {} | keys' 2>/dev/null \
+            || log_info "  (policy unavailable — sandbox may not exist)"
+        exit 0
+        ;;
+
+    # -----------------------------------------------------------------------
+    # connect — attach to running sandbox interactive shell
+    # -----------------------------------------------------------------------
+    connect)
+        log_info "Connecting to sandbox ${SANDBOX_NAME}..."
+        openshell sandbox connect "${SANDBOX_NAME}"
+        exit 0
+        ;;
+
+    # -----------------------------------------------------------------------
+    # login — connect + guide operator through in-sandbox OAuth login
+    # -----------------------------------------------------------------------
+    login)
+        ensure_podman_ready
+        log_info "Launching Claude OAuth login inside ${SANDBOX_NAME}."
+        log_info "When Claude prints a login URL:"
+        log_info "  1. Open the URL in a browser OUTSIDE the sandbox"
+        log_info "  2. Authenticate with your Claude subscription"
+        log_info "  3. Copy and paste the returned code into the in-sandbox prompt"
+        log_info "The token is stored at ~/.claude/.credentials.json INSIDE the sandbox."
+        log_info "Connecting to sandbox — run 'claude' inside to begin OAuth flow..."
+        openshell sandbox connect "${SANDBOX_NAME}"
+        exit 0
+        ;;
+
+    # -----------------------------------------------------------------------
+    # down — idempotent sandbox delete (no native stop; down = delete)
+    # -----------------------------------------------------------------------
+    down)
+        log_info "Deleting sandbox ${SANDBOX_NAME} (idempotent)..."
+        DELETE_OUT=$(openshell sandbox delete "${SANDBOX_NAME}" 2>&1) && true
+        DELETE_RC=$?
+        if [[ ${DELETE_RC} -ne 0 ]]; then
+            if echo "${DELETE_OUT}" | grep -q "sandbox not found"; then
+                log_info "Sandbox ${SANDBOX_NAME} not found — nothing to delete (idempotent)"
+            else
+                log_error "openshell sandbox delete failed: ${DELETE_OUT}"
+                exit 1
+            fi
+        else
+            log_info "Sandbox ${SANDBOX_NAME} deleted"
+        fi
+        exit 0
+        ;;
+
+    # -----------------------------------------------------------------------
+    # audit — surface openshell logs (BLD-05 / D-07)
+    # -----------------------------------------------------------------------
+    audit)
+        log_info "Surfacing openshell logs for ${SANDBOX_NAME} (audit — no build/teardown/create)"
+        audit_sandbox "${SANDBOX_NAME}" "${AUDIT_SINCE}"
+        exit 0
+        ;;
+
+    # -----------------------------------------------------------------------
+    # rebuild — full clean rebuild (default)
+    # -----------------------------------------------------------------------
+    rebuild)
+        preflight_tools
+        ensure_podman_ready
+        ;;
+
+    *)
+        log_error "Internal error: unhandled verb '${VERB}'"
         exit 1
-    fi
-done
-log_info "Preflight passed — all required tools found"
+        ;;
+esac
 
 # ---------------------------------------------------------------------------
-# --set-model fast-switch: configure inference only, then exit (no rebuild)
+# Below: rebuild path only
 # ---------------------------------------------------------------------------
-if [[ "${SET_MODEL_MODE}" == "true" ]]; then
-    log_info "--set-model mode: configuring inference provider + gateway model (no rebuild)"
-    ensure_inference_provider
-    check_inference_provider
-    log_info "Gateway model set to ${MODEL}; start a new Claude session to use it"
-    exit 0
-fi
-
-# ---------------------------------------------------------------------------
-# Step 0: Ensure inference provider + gateway model (NET-03 / D-04)
-# ---------------------------------------------------------------------------
-log_step 0 "Ensure inference provider (create-or-update) + set gateway model"
-ensure_inference_provider
-
-# Step 0b provider preflight: verify the configured provider is readable before the
-# slow sandbox create (mitigates OpenShell #759 ~290s hang on missing provider).
-check_inference_provider
 
 # ---------------------------------------------------------------------------
 # Compute BUILD_DATE once (used for image tag and passed to build-and-lock.sh)
@@ -486,6 +484,7 @@ log_info "Bind source: ${CLAUDESHARED_ABS}"
 
 # BLD-06: always use the full local image ref (localhost/claude-sandbox:<date>)
 # CLAUDE.md: source must be an absolute path (never ~); bind mount schema uses type/source/target/read_only
+# policy.yaml carries the api.anthropic.com:443 passthrough allow (architecture B-hardened)
 openshell sandbox create \
     --name "${SANDBOX_NAME}" \
     --from "localhost/claude-sandbox:${BUILD_DATE}" \
@@ -506,29 +505,30 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 5: Assert no direct Anthropic egress in live policy (NET-04 / D-02)
+# Step 5: Assert anthropic-only passthrough, claude-scoped, no statsig/sentry (NET-04)
 # ---------------------------------------------------------------------------
-log_step 5 "NET-04 — Assert no direct Anthropic egress in live policy"
-assert_no_anthropic_egress "${SANDBOX_NAME}"
+log_step 5 "NET-04 — Assert anthropic-only egress in live policy (passthrough, claude-scoped)"
+assert_anthropic_only_egress "${SANDBOX_NAME}"
 
 # ---------------------------------------------------------------------------
-# Step 6: Egress smoke test — confirm outbound connections are blocked (NET-05 / D-05)
+# Step 6: Egress smoke test — api.anthropic.com reachable; others blocked (NET-05)
 # ---------------------------------------------------------------------------
 log_step 6 "NET-05 — Egress smoke test (in-sandbox curl)"
 run_egress_smoke_test "${SANDBOX_NAME}"
-
-# ---------------------------------------------------------------------------
-# Step 7: D-06 — Inference round-trip through inference.local (non-fatal)
-# ---------------------------------------------------------------------------
-log_step 7 "D-06 — Inference round-trip (non-fatal)"
-run_inference_round_trip "${SANDBOX_NAME}"
 
 echo "" >&2
 log_info "rebuild.sh complete — sandbox ${SANDBOX_NAME} is Ready"
 log_info "  Image:          localhost/claude-sandbox:${BUILD_DATE}"
 log_info "  Bind mount:     ${CLAUDESHARED_ABS} -> /claudeshared (read-write)"
 log_info "  Policy:         ${PROJECT_ROOT}/policy.yaml"
-log_info "  Egress audit:   ./rebuild.sh --audit (surfaces openshell logs)"
-log_info "  NET-04:         PASS (no direct Anthropic endpoints in live policy)"
-log_info "  NET-05:         PASS (outbound egress blocked — two targets confirmed)"
-log_info "  Round-trip:     ${ROUND_TRIP_STATUS}"
+log_info "  NET-04:         PASS (api.anthropic.com:443 passthrough, claude-scoped; statsig+sentry absent)"
+log_info "  NET-05:         PASS (api.anthropic.com reachable; statsig/sentry/google blocked)"
+log_info ""
+log_info "Next step — subscription OAuth login (one-time per session):"
+log_info "  ./rebuild.sh login"
+log_info "  (open the URL in a browser OUTSIDE the sandbox, paste the code back)"
+log_info ""
+log_info "Other verbs:"
+log_info "  ./rebuild.sh connect   # attach to sandbox shell"
+log_info "  ./rebuild.sh audit     # surface openshell logs"
+log_info "  ./rebuild.sh down      # delete sandbox (re-login required after next rebuild)"

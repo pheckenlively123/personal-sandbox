@@ -225,6 +225,8 @@ audit_sandbox() {
 # ---------------------------------------------------------------------------
 COOLDOWN_DAYS=4
 SANDBOX_NAME="claude-sandbox"
+SHARED_DIR="/claudeshared"   # in-sandbox mount target for the host bind mount; default cwd
+                             # for connect/login (clone + work on repos here)
 VERB="rebuild"    # default verb
 
 # ---------------------------------------------------------------------------
@@ -334,8 +336,12 @@ case "${VERB}" in
     # connect — attach to running sandbox interactive shell
     # -----------------------------------------------------------------------
     connect)
-        log_info "Connecting to sandbox ${SANDBOX_NAME}..."
-        openshell sandbox connect "${SANDBOX_NAME}"
+        # `openshell sandbox connect` has no working-directory flag and drops you at /,
+        # which is not in the Landlock allowlist (can't even `ls`). Use `exec --tty
+        # --workdir` instead to land in the host-shared dir, where the operator clones
+        # and works on repos. /claudeshared is the bind mount (read_write in policy.yaml).
+        log_info "Connecting to sandbox ${SANDBOX_NAME} (cwd: ${SHARED_DIR})..."
+        openshell sandbox exec --name "${SANDBOX_NAME}" --tty --workdir "${SHARED_DIR}" -- /bin/bash
         exit 0
         ;;
 
@@ -350,8 +356,8 @@ case "${VERB}" in
         log_info "  2. Authenticate with your Claude subscription"
         log_info "  3. Copy and paste the returned code into the in-sandbox prompt"
         log_info "The token is stored at ~/.claude/.credentials.json INSIDE the sandbox."
-        log_info "Connecting to sandbox — run 'claude' inside to begin OAuth flow..."
-        openshell sandbox connect "${SANDBOX_NAME}"
+        log_info "Connecting to sandbox (cwd: ${SHARED_DIR}) — run 'claude' inside to begin OAuth flow..."
+        openshell sandbox exec --name "${SANDBOX_NAME}" --tty --workdir "${SHARED_DIR}" -- /bin/bash
         exit 0
         ;;
 
@@ -499,7 +505,7 @@ openshell sandbox create \
     --name "${SANDBOX_NAME}" \
     --from "localhost/claude-sandbox:${BUILD_DATE}" \
     --policy "${PROJECT_ROOT}/policy.yaml" \
-    --driver-config-json "{\"podman\":{\"mounts\":[{\"type\":\"bind\",\"source\":\"${CLAUDESHARED_ABS}\",\"target\":\"/claudeshared\",\"read_only\":false}]}}" \
+    --driver-config-json "{\"podman\":{\"mounts\":[{\"type\":\"bind\",\"source\":\"${CLAUDESHARED_ABS}\",\"target\":\"${SHARED_DIR}\",\"read_only\":false}]}}" \
     --no-tty \
     -- /bin/true
 

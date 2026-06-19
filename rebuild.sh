@@ -2,33 +2,48 @@
 # rebuild.sh — Idempotent top-level orchestrator for the claude-sandbox lifecycle.
 #
 # Usage:
-#   ./rebuild.sh [--cooldown-days N]
-#   ./rebuild.sh --audit
+#   ./rebuild.sh [rebuild] [--cooldown-days N]   # Full clean rebuild (default)
+#   ./rebuild.sh status                           # Status summary (read-only)
+#   ./rebuild.sh connect                          # Attach to running sandbox shell
+#   ./rebuild.sh login                            # Connect + launch Claude OAuth login flow
+#   ./rebuild.sh down                             # Delete sandbox (idempotent)
+#   ./rebuild.sh audit [--since <ts>]             # Surface openshell logs
 #
-# Steps (normal mode):
+# Architecture B — hardened to claude-egress-allowlist direct egress:
+#   - Claude Code runs INSIDE the sandbox and connects DIRECTLY to the three Claude hosts:
+#     api.anthropic.com (inference), platform.claude.com (Console auth), claude.ai (auth)
+#   - Subscription OAuth login: `./rebuild.sh login` → open URL in browser OUTSIDE the
+#     sandbox → paste the returned code into the in-sandbox prompt. One-time per session.
+#   - No inference.local gateway. No ANTHROPIC_API_KEY. No host-side provider setup.
+#   - The sandbox policy allows ONLY the three Claude auth/API hosts (TLS passthrough,
+#     binary-scoped to /usr/bin/claude and /usr/local/bin/claude). All other egress denied.
+#   - CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 keeps statsig/sentry/downloads unused.
+#   - On-the-fly model selection via Claude's native /model command (Opus/Sonnet/Haiku).
+#
+# Steps (rebuild verb):
 #   1. Preflight — verify required tools are on PATH
 #   2. Resolve cooldown versions and build container image (delegates to build-and-lock.sh)
 #   3. Tag :latest alias
 #   4. Teardown existing sandbox and images (tolerate-absent — idempotent)
 #   5. Create sandbox with ~/claudeshared bind mount and policy.yaml
-#
-# Subcommands:
-#   --audit   Surface openshell logs for claude-sandbox without rebuilding (BLD-05)
+#   6. NET-04: Assert effective live policy = all 3 claude-egress hosts present, passthrough,
+#      claude-scoped, no statsig.anthropic.com, no sentry.io (FATAL)
+#   7. NET-05: In-sandbox curl — assert deny posture ONLY (statsig/sentry/google BLOCKED);
+#      claude-host reachability validated functionally by ./rebuild.sh login (FATAL)
 #
 # Decisions:
 #   D-01: Full clean rebuild every run (tear down existing sandbox + images before create)
 #   D-02: Tolerate-absent teardown — absent sandbox/images are not errors
 #   D-03: Tag :latest alias after date-pinned build
 #   D-05: Subprocess delegation — rebuild.sh does not re-implement version resolution
-#   D-06: Timestamped per-phase banners for phases this script controls
-#   D-07: --audit is log-surfacing only; never asserts egress policy (Phase 3)
+#   D-07: audit verb is log-surfacing only; never asserts policy
 
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ---------------------------------------------------------------------------
-# Logging helpers (BLD-04 / D-06)
+# Logging helpers (BLD-04 / D-07)
 # ---------------------------------------------------------------------------
 ts() { python3 -c "from datetime import datetime,timezone; print(datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))"; }
 
@@ -40,13 +55,168 @@ log_info()  { echo "INFO: $1" >&2; }
 log_error() { echo "ERROR: $1" >&2; }
 
 # ---------------------------------------------------------------------------
-# Audit subcommand (BLD-05 / D-07 — log-surfacing only)
+# Portable podman readiness (Finding 8 — machine-detect + systemctl fallback)
+# ---------------------------------------------------------------------------
+# Detects whether we are on a machine-based host (macOS) or a native Linux host.
+# macOS: podman machine inspect/start path.
+# Linux/Fedora: systemctl --user start podman.socket (best effort).
+# Either way, `podman info` is the final readiness gate.
+ensure_podman_ready() {
+    local machine_list
+    machine_list=$(podman machine list --format '{{.Name}}' 2>/dev/null || true)
+
+    if [[ -n "${machine_list}" ]]; then
+        # macOS / machine-based host
+        local podman_state rc_inspect=0
+        podman_state=$(podman machine inspect --format '{{.State}}' 2>/dev/null) || rc_inspect=$?
+        if [[ ${rc_inspect} -ne 0 || "${podman_state}" != "running" ]]; then
+            log_info "Podman machine not running (state=${podman_state:-unknown}); starting..."
+            podman machine start
+            local rc_recheck=0
+            podman_state=$(podman machine inspect --format '{{.State}}' 2>/dev/null) || rc_recheck=$?
+            if [[ ${rc_recheck} -ne 0 || "${podman_state}" != "running" ]]; then
+                log_error "Podman machine failed to start (state=${podman_state:-unknown})."
+                log_error "Try: podman machine start"
+                exit 1
+            fi
+        fi
+        log_info "Podman machine is running"
+    else
+        # Native Linux / Fedora host — start the user socket (best effort; may already be active)
+        systemctl --user start podman.socket 2>/dev/null || true
+        log_info "Podman socket start attempted (Linux native host)"
+    fi
+
+    # Final gate regardless of platform
+    if ! podman info >/dev/null 2>&1; then
+        log_error "Podman is not ready (podman info failed)."
+        log_error "On Linux: systemctl --user start podman.socket (may need: loginctl enable-linger \$USER)"
+        log_error "On macOS: podman machine start"
+        exit 1
+    fi
+    log_info "Podman is ready"
+}
+
+# ---------------------------------------------------------------------------
+# NET-04 live policy assertion — claude-egress allowlist, passthrough, claude-scoped (Finding 5)
+# ---------------------------------------------------------------------------
+# Asserts the live effective sandbox policy:
+#   PASS requires: api.anthropic.com:443, platform.claude.com:443, and claude.ai:443 all
+#                  present with no `protocol` field (passthrough), at least one binary entry
+#                  matching */claude, statsig.anthropic.com ABSENT, sentry.io ABSENT.
+#   FAIL on any violation — fatal (exit 1).
+assert_claude_egress_allowlist() {
+    local sandbox_name="${1}"
+    local policy_json
+    policy_json=$(openshell policy get "${sandbox_name}" --full -o json 2>&1)
+
+    # --- Require all three Claude auth/API hosts to be present ---
+    local -a required_hosts=("api.anthropic.com" "platform.claude.com" "claude.ai")
+    for req_host in "${required_hosts[@]}"; do
+        if ! echo "${policy_json}" | jq -e \
+            --arg h "${req_host}" \
+            '.policy.network_policies // {} | to_entries[] | .value.endpoints[]? | select(.host == $h and .port == 443)' \
+            >/dev/null 2>&1; then
+            log_error "NET-04 VIOLATION: ${req_host}:443 NOT found in effective policy — passthrough allow missing!"
+            log_error "Policy output: ${policy_json}"
+            exit 1
+        fi
+        log_info "NET-04: ${req_host}:443 present in policy"
+
+        # --- Require NO protocol field on this host (passthrough = omit protocol) ---
+        if echo "${policy_json}" | jq -e \
+            --arg h "${req_host}" \
+            '.policy.network_policies // {} | to_entries[] | .value.endpoints[]? | select(.host == $h) | select(.protocol != null)' \
+            >/dev/null 2>&1; then
+            log_error "NET-04 VIOLATION: ${req_host} endpoint has a 'protocol' field — must be omitted for TLS passthrough!"
+            log_error "Policy output: ${policy_json}"
+            exit 1
+        fi
+        log_info "NET-04: ${req_host} endpoint has no 'protocol' field (opaque passthrough confirmed)"
+    done
+
+    # --- Require at least one binary scoped to */claude (check via api.anthropic.com policy entry) ---
+    if ! echo "${policy_json}" | jq -e \
+        '.policy.network_policies // {} | to_entries[] | .value | select(.endpoints[]? | .host == "api.anthropic.com") | .binaries[]? | select(.path | test(".*/claude$"))' \
+        >/dev/null 2>&1; then
+        log_error "NET-04 VIOLATION: claude-egress policy has no binary entry matching */claude!"
+        log_error "Policy output: ${policy_json}"
+        exit 1
+    fi
+    log_info "NET-04: Binary-scoped to claude confirmed"
+
+    # --- Require statsig.anthropic.com ABSENT ---
+    if echo "${policy_json}" | jq -e \
+        '.policy.network_policies // {} | to_entries[] | .value.endpoints[]? | select(.host | test("statsig"; "i"))' \
+        >/dev/null 2>&1; then
+        log_error "NET-04 VIOLATION: statsig.anthropic.com found in effective policy — must be absent!"
+        log_error "Policy output: ${policy_json}"
+        exit 1
+    fi
+    log_info "NET-04: statsig.anthropic.com absent (telemetry blocked)"
+
+    # --- Require sentry.io ABSENT ---
+    if echo "${policy_json}" | jq -e \
+        '.policy.network_policies // {} | to_entries[] | .value.endpoints[]? | select(.host | test("sentry"; "i"))' \
+        >/dev/null 2>&1; then
+        log_error "NET-04 VIOLATION: sentry.io found in effective policy — must be absent!"
+        log_error "Policy output: ${policy_json}"
+        exit 1
+    fi
+    log_info "NET-04: sentry.io absent (error-reporting blocked)"
+
+    log_info "NET-04 PASS: api.anthropic.com, platform.claude.com, claude.ai — all :443 passthrough, claude-scoped; statsig+sentry absent"
+}
+
+# ---------------------------------------------------------------------------
+# NET-05 egress smoke test — deny posture only (Finding 5; redesigned post-login-debugging)
+# ---------------------------------------------------------------------------
+# Asserts that non-allowlisted hosts are BLOCKED from inside the sandbox.
+# curl is NOT the claude binary — binary-scoping prevents curl from reaching ANY host,
+# including api.anthropic.com. Reachability of the Claude auth/API hosts is validated
+# functionally by `./rebuild.sh login` (the claude binary), NOT by curl.
+#
+# Blocked targets (each must fail to connect):
+#   statsig.anthropic.com → BLOCKED (telemetry — intentionally absent from allowlist)
+#   sentry.io             → BLOCKED (error-reporting — intentionally absent)
+#   www.google.com        → BLOCKED (open internet — proves deny-all-except-allowlist)
+#
+# curl exit != 0 OR status 000/empty = proxy denied = PASS.
+# curl exit 0  AND non-000 status    = proxy allowed = FAIL (deny-all is broken).
+run_egress_smoke_test() {
+    local sandbox_name="${1}"
+
+    log_info "NET-05: Anthropic auth/API host reachability is validated by './rebuild.sh login' (claude binary)."
+    log_info "NET-05: curl is not the claude binary — binary-scoping blocks curl from reaching ANY host."
+    log_info "NET-05: Asserting deny posture only (non-allowlisted hosts must be blocked)..."
+
+    # --- Blocked targets: each must fail to connect ---
+    local -a blocked_targets=("https://statsig.anthropic.com" "https://sentry.io" "https://www.google.com")
+    for target in "${blocked_targets[@]}"; do
+        local rc=0 status=""
+        status=$(openshell sandbox exec --name "${sandbox_name}" --no-tty \
+            -- curl -sS -o /dev/null -w '%{http_code}' --max-time 8 \
+            "${target}" 2>/dev/null) || rc=$?
+
+        if [[ ${rc} -eq 0 && -n "${status}" && "${status}" != "000" ]]; then
+            log_error "NET-05 VIOLATION: Egress to ${target} SUCCEEDED (HTTP ${status}) — deny-all is broken!"
+            exit 1
+        fi
+        log_info "NET-05 PASS: ${target} blocked (curl exit ${rc}, status='${status}')"
+    done
+
+    log_info "NET-05 PASS: All non-allowlisted targets confirmed denied"
+}
+
+# ---------------------------------------------------------------------------
+# Audit verb (D-07 — log-surfacing only)
 # ---------------------------------------------------------------------------
 audit_sandbox() {
     local name="${1:-claude-sandbox}"
     local since="${2:-}"
     local since_arg=""
-    [[ -n "$since" ]] && since_arg="--since ${since}"
+    [[ -n "${since}" ]] && since_arg="--since ${since}"
+    # shellcheck disable=SC2086
     openshell logs "${name}" ${since_arg} --source all
 }
 
@@ -55,11 +225,35 @@ audit_sandbox() {
 # ---------------------------------------------------------------------------
 COOLDOWN_DAYS=4
 SANDBOX_NAME="claude-sandbox"
-AUDIT_MODE=false
+SHARED_DIR="/claudeshared"   # in-sandbox mount target for the host bind mount; default cwd
+                             # for connect/login (clone + work on repos here)
+VERB="rebuild"    # default verb
 
 # ---------------------------------------------------------------------------
-# Argument parsing (mirror build-and-lock.sh two-form style)
+# Verb-first argument parsing
 # ---------------------------------------------------------------------------
+# Accept positional verb as first argument; flags follow.
+if [[ $# -gt 0 ]]; then
+    case "$1" in
+        rebuild|status|connect|login|down|audit)
+            VERB="$1"
+            shift
+            ;;
+        --cooldown-days|--cooldown-days=*|--audit)
+            # Backward-compat: flag-first form with no explicit verb → verb=rebuild
+            VERB="rebuild"
+            ;;
+        *)
+            log_error "Unknown verb or argument: $1"
+            echo "Usage: $0 [rebuild|status|connect|login|down|audit] [--cooldown-days N]" >&2
+            echo "       $0 [--cooldown-days N]   (shorthand for rebuild)" >&2
+            echo "       $0 --audit               (shorthand for audit verb)" >&2
+            exit 1
+            ;;
+    esac
+fi
+
+AUDIT_SINCE=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --cooldown-days)
@@ -75,37 +269,148 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --audit)
-            AUDIT_MODE=true
+            # Backward-compat alias: treat as the audit verb redirect
+            VERB="audit"
+            shift
+            ;;
+        --since)
+            if [[ -z "${2-}" ]]; then
+                log_error "--since requires an argument"
+                exit 1
+            fi
+            AUDIT_SINCE="$2"
+            shift 2
+            ;;
+        --since=*)
+            AUDIT_SINCE="${1#--since=}"
             shift
             ;;
         *)
             log_error "Unknown argument: $1"
-            echo "Usage: $0 [--cooldown-days N]" >&2
-            echo "       $0 --audit" >&2
+            echo "Usage: $0 [rebuild|status|connect|login|down|audit] [--cooldown-days N]" >&2
             exit 1
             ;;
     esac
 done
 
 # ---------------------------------------------------------------------------
-# --audit subcommand: surface logs and exit without building (BLD-05)
+# Preflight: verify required tools are on PATH (fail-closed; skip for connect/login/down)
 # ---------------------------------------------------------------------------
-if [[ "${AUDIT_MODE}" == "true" ]]; then
-    log_info "Surfacing openshell logs for ${SANDBOX_NAME} (--audit mode — no build/teardown/create)"
-    audit_sandbox "${SANDBOX_NAME}"
-    exit 0
-fi
+preflight_tools() {
+    for cmd in podman openshell python3 jq; do
+        if ! command -v "${cmd}" >/dev/null 2>&1; then
+            log_error "Required tool not found on PATH: ${cmd}"
+            exit 1
+        fi
+    done
+    log_info "Preflight passed — all required tools found"
+}
 
 # ---------------------------------------------------------------------------
-# Preflight: verify required tools are on PATH (fail-closed)
+# Verb dispatch
 # ---------------------------------------------------------------------------
-for cmd in podman openshell python3 jq; do
-    if ! command -v "${cmd}" >/dev/null 2>&1; then
-        log_error "Required tool not found on PATH: ${cmd}"
+
+case "${VERB}" in
+
+    # -----------------------------------------------------------------------
+    # status — read-only summary (podman + openshell + sandbox + effective policy)
+    # -----------------------------------------------------------------------
+    status)
+        preflight_tools
+        log_info "=== Status summary (read-only) ==="
+        log_info "Checking podman..."
+        podman info --format 'Host: {{.Host.OS}}/{{.Host.Arch}}, Store: {{.Store.GraphDriver}}' 2>/dev/null \
+            || log_info "  podman not ready"
+        log_info "Checking sandbox ${SANDBOX_NAME}..."
+        openshell sandbox list --names 2>/dev/null | grep "^${SANDBOX_NAME}$" \
+            && log_info "  Sandbox ${SANDBOX_NAME}: EXISTS" \
+            || log_info "  Sandbox ${SANDBOX_NAME}: not found"
+        log_info "Checking effective policy (if sandbox exists)..."
+        openshell policy get "${SANDBOX_NAME}" --full -o json 2>/dev/null \
+            | jq '.policy.network_policies // {} | keys' 2>/dev/null \
+            || log_info "  (policy unavailable — sandbox may not exist)"
+        exit 0
+        ;;
+
+    # -----------------------------------------------------------------------
+    # connect — attach to running sandbox interactive shell
+    # -----------------------------------------------------------------------
+    connect)
+        # `openshell sandbox connect` has no working-directory flag and drops you at /,
+        # which is not in the Landlock allowlist (can't even `ls`). Use `exec --tty
+        # --workdir` instead to land in the host-shared dir, where the operator clones
+        # and works on repos. /claudeshared is the bind mount (read_write in policy.yaml).
+        log_info "Connecting to sandbox ${SANDBOX_NAME} (cwd: ${SHARED_DIR})..."
+        openshell sandbox exec --name "${SANDBOX_NAME}" --tty --workdir "${SHARED_DIR}" -- /bin/bash
+        exit 0
+        ;;
+
+    # -----------------------------------------------------------------------
+    # login — connect + guide operator through in-sandbox OAuth login
+    # -----------------------------------------------------------------------
+    login)
+        ensure_podman_ready
+        log_info "Launching Claude OAuth login inside ${SANDBOX_NAME}."
+        log_info "When Claude prints a login URL:"
+        log_info "  1. Open the URL in a browser OUTSIDE the sandbox"
+        log_info "  2. Authenticate with your Claude subscription"
+        log_info "  3. Copy and paste the returned code into the in-sandbox prompt"
+        log_info "The token is stored at ~/.claude/.credentials.json INSIDE the sandbox."
+        log_info "Connecting to sandbox (cwd: ${SHARED_DIR}) — run 'claude' inside to begin OAuth flow..."
+        openshell sandbox exec --name "${SANDBOX_NAME}" --tty --workdir "${SHARED_DIR}" -- /bin/bash
+        exit 0
+        ;;
+
+    # -----------------------------------------------------------------------
+    # down — idempotent sandbox delete (no native stop; down = delete)
+    # -----------------------------------------------------------------------
+    down)
+        log_info "Deleting sandbox ${SANDBOX_NAME} (idempotent)..."
+        DELETE_OUT=$(openshell sandbox delete "${SANDBOX_NAME}" 2>&1) && true
+        DELETE_RC=$?
+        if [[ ${DELETE_RC} -ne 0 ]]; then
+            # openshell wraps long error text across lines with box-drawing chars, so
+            # "sandbox not found" can be split (e.g. 'sandbox not\n  | found'). Normalize
+            # to alphanumerics+whitespace and collapse before matching the not-found case.
+            DELETE_NORM=$(printf '%s' "${DELETE_OUT}" | tr -dc '[:alnum:][:space:]' | tr -s '[:space:]' ' ')
+            if printf '%s' "${DELETE_NORM}" | grep -qi "not found"; then
+                log_info "Sandbox ${SANDBOX_NAME} not found — nothing to delete (idempotent)"
+            else
+                log_error "openshell sandbox delete failed: ${DELETE_OUT}"
+                exit 1
+            fi
+        else
+            log_info "Sandbox ${SANDBOX_NAME} deleted"
+        fi
+        exit 0
+        ;;
+
+    # -----------------------------------------------------------------------
+    # audit — surface openshell logs (BLD-05 / D-07)
+    # -----------------------------------------------------------------------
+    audit)
+        log_info "Surfacing openshell logs for ${SANDBOX_NAME} (audit — no build/teardown/create)"
+        audit_sandbox "${SANDBOX_NAME}" "${AUDIT_SINCE}"
+        exit 0
+        ;;
+
+    # -----------------------------------------------------------------------
+    # rebuild — full clean rebuild (default)
+    # -----------------------------------------------------------------------
+    rebuild)
+        preflight_tools
+        ensure_podman_ready
+        ;;
+
+    *)
+        log_error "Internal error: unhandled verb '${VERB}'"
         exit 1
-    fi
-done
-log_info "Preflight passed — all required tools found"
+        ;;
+esac
+
+# ---------------------------------------------------------------------------
+# Below: rebuild path only
+# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # Compute BUILD_DATE once (used for image tag and passed to build-and-lock.sh)
@@ -139,7 +444,11 @@ log_step 3 "Teardown existing sandbox and images"
 DELETE_OUT=$(openshell sandbox delete "${SANDBOX_NAME}" 2>&1) && true
 DELETE_RC=$?
 if [[ $DELETE_RC -ne 0 ]]; then
-    if echo "${DELETE_OUT}" | grep -q "sandbox not found"; then
+    # openshell wraps long error text across lines with box-drawing chars, so
+    # "sandbox not found" can be split (e.g. 'sandbox not\n  | found'). Normalize
+    # to alphanumerics+whitespace and collapse before matching the not-found case.
+    DELETE_NORM=$(printf '%s' "${DELETE_OUT}" | tr -dc '[:alnum:][:space:]' | tr -s '[:space:]' ' ')
+    if printf '%s' "${DELETE_NORM}" | grep -qi "not found"; then
         log_info "Sandbox ${SANDBOX_NAME} not found — nothing to tear down"
     else
         log_error "openshell sandbox delete failed: ${DELETE_OUT}"
@@ -191,11 +500,12 @@ log_info "Bind source: ${CLAUDESHARED_ABS}"
 
 # BLD-06: always use the full local image ref (localhost/claude-sandbox:<date>)
 # CLAUDE.md: source must be an absolute path (never ~); bind mount schema uses type/source/target/read_only
+# policy.yaml carries the claude-egress allowlist (api.anthropic.com + platform.claude.com + claude.ai — architecture B-hardened)
 openshell sandbox create \
     --name "${SANDBOX_NAME}" \
     --from "localhost/claude-sandbox:${BUILD_DATE}" \
     --policy "${PROJECT_ROOT}/policy.yaml" \
-    --driver-config-json "{\"podman\":{\"mounts\":[{\"type\":\"bind\",\"source\":\"${CLAUDESHARED_ABS}\",\"target\":\"/claudeshared\",\"read_only\":false}]}}" \
+    --driver-config-json "{\"podman\":{\"mounts\":[{\"type\":\"bind\",\"source\":\"${CLAUDESHARED_ABS}\",\"target\":\"${SHARED_DIR}\",\"read_only\":false}]}}" \
     --no-tty \
     -- /bin/true
 
@@ -210,9 +520,31 @@ else
     exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# Step 5: Assert claude-egress allowlist — all 3 hosts, passthrough, claude-scoped (NET-04)
+# ---------------------------------------------------------------------------
+log_step 5 "NET-04 — Assert claude-egress allowlist in live policy (3 hosts, passthrough, claude-scoped)"
+assert_claude_egress_allowlist "${SANDBOX_NAME}"
+
+# ---------------------------------------------------------------------------
+# Step 6: Egress smoke test — deny posture only (NET-05)
+# ---------------------------------------------------------------------------
+log_step 6 "NET-05 — Egress smoke test: deny posture (statsig/sentry/google blocked)"
+run_egress_smoke_test "${SANDBOX_NAME}"
+
 echo "" >&2
 log_info "rebuild.sh complete — sandbox ${SANDBOX_NAME} is Ready"
 log_info "  Image:          localhost/claude-sandbox:${BUILD_DATE}"
 log_info "  Bind mount:     ${CLAUDESHARED_ABS} -> /claudeshared (read-write)"
 log_info "  Policy:         ${PROJECT_ROOT}/policy.yaml"
-log_info "  Egress audit:   ./rebuild.sh --audit (surfaces openshell logs)"
+log_info "  NET-04:         PASS (api.anthropic.com + platform.claude.com + claude.ai — :443 passthrough, claude-scoped; statsig+sentry absent)"
+log_info "  NET-05:         PASS (deny posture: statsig/sentry/google blocked; claude-host reachability via ./rebuild.sh login)"
+log_info ""
+log_info "Next step — subscription OAuth login (one-time per session):"
+log_info "  ./rebuild.sh login"
+log_info "  (open the URL in a browser OUTSIDE the sandbox, paste the code back)"
+log_info ""
+log_info "Other verbs:"
+log_info "  ./rebuild.sh connect   # attach to sandbox shell"
+log_info "  ./rebuild.sh audit     # surface openshell logs"
+log_info "  ./rebuild.sh down      # delete sandbox (re-login required after next rebuild)"

@@ -100,8 +100,15 @@ while IFS='=' read -r key val; do
             fi
             printf -v COOLDOWN_DATE '%s' "${val}"
             ;;
-        GOVULNCHECK_VERSION|GSD_CORE_VERSION|CLAUDE_CODE_VERSION)
+        GOVULNCHECK_VERSION)
             if ! [[ "${val}" =~ ^v?[0-9][0-9A-Za-z._-]*$ ]]; then
+                echo "ERROR: Resolver emitted invalid ${key} value: '${val}'" >&2
+                exit 1
+            fi
+            printf -v "${key}" '%s' "${val}"
+            ;;
+        GSD_CORE_VERSION|CLAUDE_CODE_VERSION)
+            if ! [[ "${val}" =~ ^[0-9][0-9A-Za-z._-]*$ ]]; then
                 echo "ERROR: Resolver emitted invalid ${key} value: '${val}'" >&2
                 exit 1
             fi

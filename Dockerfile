@@ -40,18 +40,38 @@ RUN node --version && npm --version
 # GOPATH/bin must be on PATH for the binary to be found at runtime.
 ENV GOPATH=/root/go
 ENV PATH="${PATH}:/root/go/bin"
+
+# Disable Claude Code non-essential traffic (auto-updater, telemetry, Sentry error-reporting,
+# feedback). This ensures statsig.anthropic.com, sentry.io, and downloads.claude.ai are never
+# contacted — keeping the zero-egress policy clean without needing those hosts in the allowlist.
+ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 RUN go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
 
-# Step 4: gsd-core via npm — top-level pin + transitive cooldown via --before (PIN-04, D-02).
-# --before must use end-of-day UTC (T23:59:59Z) to include versions published on the cutoff day
-# (Pitfall 2: inclusive end-of-day cutoff). COOLDOWN_DATE is YYYY-MM-DD; append T23:59:59Z here.
-# gsd-core --claude --global runs bin/install.js which writes Claude hooks to /root/.claude/ (Pitfall 5).
-RUN npm install -g @opengsd/gsd-core@${GSD_CORE_VERSION} --before="${COOLDOWN_DATE}T23:59:59Z" && \
+# Step 4: gsd-core via npm — explicit version pin + --before date (PIN-04, D-02).
+# --before="${COOLDOWN_DATE}T23:59:59Z" pins the full transitive tree to versions published
+# on or before the cooldown date (widely supported by old and new npm alike).
+# GSD_CORE_VERSION is the pre-resolved top-level pin (from resolve-versions.sh).
+# Script policy: --ignore-scripts — gsd-core has no install/preinstall/postinstall scripts;
+# setup is done by the explicit gsd-core --claude --global call below.
+# Source policy: --allow-git/remote/directory=none — registry-only; defaults are permissive (all).
+RUN npm install -g @opengsd/gsd-core@${GSD_CORE_VERSION} \
+        --before="${COOLDOWN_DATE}T23:59:59Z" \
+        --ignore-scripts \
+        --allow-git=none --allow-remote=none --allow-directory=none && \
     gsd-core --claude --global
 
-# Step 5: Claude Code CLI via npm — top-level pin + transitive cooldown via --before (PIN-05).
-# Same end-of-day cutoff to include versions published on the cutoff day itself.
-RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} --before="${COOLDOWN_DATE}T23:59:59Z"
+# Step 5: Claude Code CLI via npm — explicit version pin + --before date (PIN-05).
+# --before="${COOLDOWN_DATE}T23:59:59Z" pins the full transitive tree to versions published
+# on or before the cooldown date (widely supported by old and new npm alike).
+# CLAUDE_CODE_VERSION is the pre-resolved top-level pin (from resolve-versions.sh).
+# Script policy: --allow-scripts @anthropic-ai/claude-code — claude-code requires its first-party
+# postinstall (node install.cjs, confirmed on 2.1.169); this permits only its own script and
+# blocks all transitive-dep scripts.
+# Source policy: --allow-git/remote/directory=none — registry-only (same rationale as Step 4).
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+        --before="${COOLDOWN_DATE}T23:59:59Z" \
+        --allow-scripts @anthropic-ai/claude-code \
+        --allow-git=none --allow-remote=none --allow-directory=none
 
 # Step 6: Clone claude-engineering-toolkit — latest HEAD, no cooldown (IMG-05).
 # Operator-maintained fork is trusted (T-01-05 accept). Must clone at build time;
@@ -89,6 +109,8 @@ RUN groupadd -g 1000 sandbox \
     && useradd -m -u 1000 -g sandbox -s /bin/bash --no-log-init sandbox
 
 # Runtime entry point: Claude Code with dangerously-skip-permissions and plugin dir.
-# ANTHROPIC_BASE_URL has no trailing /v1 (CLAUDE.md "What NOT to Use").
-ENV ANTHROPIC_BASE_URL=https://inference.local
+# Architecture B: ANTHROPIC_BASE_URL is NOT set — Claude Code uses its built-in default
+# (api.anthropic.com) and authenticates via in-sandbox subscription OAuth login.
+# The operator runs `./rebuild.sh login` to complete the OAuth flow after sandbox creation.
+# Do NOT add --bare: that flag skips OAuth and requires ANTHROPIC_API_KEY, which we do not use.
 CMD ["claude", "--dangerously-skip-permissions", "--plugin-dir", "/opt/claude-engineering-toolkit"]

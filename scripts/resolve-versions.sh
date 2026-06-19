@@ -139,51 +139,57 @@ fi
 echo "INFO: Resolved govulncheck=${GOVULNCHECK_VERSION} (published ${GOVULNCHECK_PUBDATE})" >&2
 
 # --- Resolve @opengsd/gsd-core from npm registry ---
-echo "INFO: Querying registry.npmjs.org for @opengsd/gsd-core..." >&2
+echo "INFO: Querying registry.npmjs.org for @opengsd/gsd-core versions..." >&2
 
-GSD_CORE_DOC=$(curl -sf "https://registry.npmjs.org/@opengsd/gsd-core" 2>/dev/null || true)
-if [[ -z "$GSD_CORE_DOC" ]]; then
+GSD_CORE_JSON=$(curl -sf "https://registry.npmjs.org/@opengsd/gsd-core" 2>/dev/null || true)
+if [[ -z "$GSD_CORE_JSON" ]]; then
     echo "ERROR: Failed to fetch @opengsd/gsd-core from registry.npmjs.org" >&2
     exit 1
 fi
 
-# CR-01 fix: use CUTOFF_EXCL (exclusive next-day midnight) instead of .value <= $cutoff.
-# jq string comparison is lexicographic; .value < $cutoff_excl correctly captures any
-# millisecond-precision timestamp on the cutoff day while excluding the next day and later.
-GSD_CORE_VERSION=$(echo "$GSD_CORE_DOC" | jq -r \
-    --arg cutoff_excl "$CUTOFF_EXCL" \
-    '.time | to_entries | map(select(.key != "created" and .key != "modified" and (.value < $cutoff_excl))) | sort_by(.value) | last | .key' \
-    2>/dev/null || true)
+GSD_CORE_VERSION=$(echo "$GSD_CORE_JSON" | jq -r \
+    --arg cutoff_excl "${CUTOFF_EXCL}" \
+    '.time | to_entries
+     | map(select(
+         (.key | test("^[0-9]+\\.[0-9]+\\.[0-9]+$")) and
+         (.value < $cutoff_excl)
+       ))
+     | sort_by(.value)
+     | last
+     | .key // empty' 2>/dev/null || true)
 
-if [[ -z "$GSD_CORE_VERSION" ]] || [[ "$GSD_CORE_VERSION" == "null" ]]; then
+if [[ -z "$GSD_CORE_VERSION" ]]; then
     echo "ERROR: No @opengsd/gsd-core version found on or before ${CUTOFF}" >&2
     exit 1
 fi
-
-GSD_CORE_PUBDATE=$(echo "$GSD_CORE_DOC" | jq -r --arg ver "$GSD_CORE_VERSION" '.time[$ver]' 2>/dev/null || true)
+GSD_CORE_PUBDATE=$(echo "$GSD_CORE_JSON" | jq -r --arg ver "$GSD_CORE_VERSION" '.time[$ver] // empty' 2>/dev/null || true)
 echo "INFO: Resolved @opengsd/gsd-core=${GSD_CORE_VERSION} (published ${GSD_CORE_PUBDATE})" >&2
 
 # --- Resolve @anthropic-ai/claude-code from npm registry ---
-echo "INFO: Querying registry.npmjs.org for @anthropic-ai/claude-code..." >&2
+echo "INFO: Querying registry.npmjs.org for @anthropic-ai/claude-code versions..." >&2
 
-CLAUDE_CODE_DOC=$(curl -sf "https://registry.npmjs.org/@anthropic-ai/claude-code" 2>/dev/null || true)
-if [[ -z "$CLAUDE_CODE_DOC" ]]; then
+CLAUDE_CODE_JSON=$(curl -sf "https://registry.npmjs.org/@anthropic-ai/claude-code" 2>/dev/null || true)
+if [[ -z "$CLAUDE_CODE_JSON" ]]; then
     echo "ERROR: Failed to fetch @anthropic-ai/claude-code from registry.npmjs.org" >&2
     exit 1
 fi
 
-# CR-01 fix: same CUTOFF_EXCL exclusive bound as above.
-CLAUDE_CODE_VERSION=$(echo "$CLAUDE_CODE_DOC" | jq -r \
-    --arg cutoff_excl "$CUTOFF_EXCL" \
-    '.time | to_entries | map(select(.key != "created" and .key != "modified" and (.value < $cutoff_excl))) | sort_by(.value) | last | .key' \
-    2>/dev/null || true)
+CLAUDE_CODE_VERSION=$(echo "$CLAUDE_CODE_JSON" | jq -r \
+    --arg cutoff_excl "${CUTOFF_EXCL}" \
+    '.time | to_entries
+     | map(select(
+         (.key | test("^[0-9]+\\.[0-9]+\\.[0-9]+$")) and
+         (.value < $cutoff_excl)
+       ))
+     | sort_by(.value)
+     | last
+     | .key // empty' 2>/dev/null || true)
 
-if [[ -z "$CLAUDE_CODE_VERSION" ]] || [[ "$CLAUDE_CODE_VERSION" == "null" ]]; then
+if [[ -z "$CLAUDE_CODE_VERSION" ]]; then
     echo "ERROR: No @anthropic-ai/claude-code version found on or before ${CUTOFF}" >&2
     exit 1
 fi
-
-CLAUDE_CODE_PUBDATE=$(echo "$CLAUDE_CODE_DOC" | jq -r --arg ver "$CLAUDE_CODE_VERSION" '.time[$ver]' 2>/dev/null || true)
+CLAUDE_CODE_PUBDATE=$(echo "$CLAUDE_CODE_JSON" | jq -r --arg ver "$CLAUDE_CODE_VERSION" '.time[$ver] // empty' 2>/dev/null || true)
 echo "INFO: Resolved @anthropic-ai/claude-code=${CLAUDE_CODE_VERSION} (published ${CLAUDE_CODE_PUBDATE})" >&2
 
 # --- Emit sourceable KEY=VALUE lines to stdout (NO extra stdout noise) ---

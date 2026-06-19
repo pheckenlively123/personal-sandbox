@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to plan
-last_updated: "2026-06-15T23:42:35.796Z"
+status: Phase 3 complete — verified (human_needed: live-host runtime checks pending)
+last_updated: "2026-06-16T23:21:04.921Z"
 progress:
   total_phases: 4
-  completed_phases: 2
-  total_plans: 5
-  completed_plans: 5
-  percent: 50
+  completed_phases: 3
+  total_plans: 7
+  completed_plans: 7
+  percent: 75
 ---
 
 # Project State: Claude Sandbox (Fedora 44 / OpenShell)
@@ -26,8 +26,8 @@ progress:
 
 ## Current Position
 
-Phase: 3
-Plan: Not started
+Phase: 03 (Network Isolation and Inference Validation) — EXECUTING
+Plan: 2 of 2
 **Phase**: 2 — Rebuild Script and Sandbox Lifecycle
 **Plan**: 02-02 — Ready to execute
 **Status**: 02-01 complete (BLD-03 satisfied); ready to start 02-02 (rebuild.sh end-to-end slice)
@@ -66,6 +66,7 @@ Plan: Not started
 | Phase 01 P02 | 254 | 2 tasks | 4 files |
 | Phase 01-dockerfile-and-supply-chain-pinning P03 | 7min | 2 tasks | 5 files |
 | Phase 02 P01 | 20min | 3 tasks | 2 files |
+| Phase 03 P01 | 3min | 2 tasks | 1 files |
 
 ### Open Questions / Risks
 
@@ -83,14 +84,29 @@ Plan: Not started
 
 *(None — Phase 1 shipped clean; the jq-missing build blocker was fixed and re-verified)*
 
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260618-p6b | npm cooldown via --min-release-age + explicit script/source flags | 2026-06-18 | a930856 | [260618-p6b-npm-cooldown-via-min-release-age-plus-ex](./quick/260618-p6b-npm-cooldown-via-min-release-age-plus-ex/) |
+| fast | rebuild.sh: distinguish gateway-unreachable from not-configured (silent-exit fix) | 2026-06-18 | b25afdd | — |
+| fast | rebuild.sh: check only Gateway inference route (ignore System/sandbox-system) in provider gate | 2026-06-18 | d166241 | — |
+| 260618-qr4 | Automate inference provider setup in rebuild.sh (--model default opus-4-8, --set-model fast-switch, podman autostart, create-or-update) | 2026-06-18 | 4b4337d | [260618-qr4-automate-inference-provider-setup-in-reb](./quick/260618-qr4-automate-inference-provider-setup-in-reb/) |
+| 260619-e0p | Architecture B-hardened redesign: verb-first rebuild.sh, subscription OAuth login, api.anthropic.com-only TLS-passthrough egress (claude-binary-scoped), inverted NET gates; removed inference.local/--model machinery | 2026-06-19 | 4f99856 | [260619-e0p-implement-architecture-b-hardened-rebuil](./quick/260619-e0p-implement-architecture-b-hardened-rebuil/) |
+| 260619-eow | Revert npm cooldown --min-release-age → --before + explicit pins (image npm too old for --min-release-age; it silently installed @latest → verify-pins PIN-07 failed) | 2026-06-19 | e9b05a2 | [260619-eow-revert-npm-cooldown-to-before-mechanism](./quick/260619-eow-revert-npm-cooldown-to-before-mechanism/) |
+| fast | rebuild.sh: tolerate wrapped "sandbox not found" in idempotent teardown (openshell miette line-wraps the phrase) | 2026-06-19 | d03d324 | — |
+| 260619-fbi | Add claude.ai + platform.claude.com to egress allowlist (subscription OAuth needs them, not just api.anthropic.com); ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1; NET-04 checks 3 hosts; NET-05 deny-posture-only (curl can't test binary-scoped allows) | 2026-06-19 | a6c8e83 | [260619-fbi-add-claude-auth-hosts-to-egress-allowlis](./quick/260619-fbi-add-claude-auth-hosts-to-egress-allowlis/) |
+| fast | policy.yaml: grant /home/sandbox in filesystem_policy so claude can persist ~/.claude OAuth token (Landlock default-deny blocked runtime home → login didn't persist) | 2026-06-19 | 851eae4 | — |
+| fast | rebuild.sh: connect/login land in /claudeshared via exec --tty --workdir (connect verb has no cwd flag; / is not Landlock-listable) | 2026-06-19 | 6338120 | — |
+
 ---
 
 ## Session Continuity
 
-**Last updated**: 2026-06-15 (Phase 2, Plan 1 complete — BLD-03 satisfied)
-**Last action**: 02-01-SUMMARY.md committed (574c97a) — plan 01 fully complete; operator verified cooldown.date + build.date labels via podman inspect
-**Next action**: Execute 02-02-PLAN.md (rebuild.sh end-to-end slice)
-**Stopped at**: Completed 02-01-PLAN.md
+**Last updated**: 2026-06-18 (Quick task 260618-p6b complete — npm cooldown switched to --min-release-age + explicit script/source policy)
+**Last action**: Quick task 260618-p6b committed (a930856) — Dockerfile/resolve-versions.sh/build-and-lock.sh/CLAUDE.md updated for native npm cooldown and registry-only/script-hardened installs
+**Next action**: Operator runs ./rebuild.sh to validate the new build (verify-pins.sh PASS + in-image claude/gsd-core functional checks); then Phase 4
+**Stopped at**: Phase 3 complete + quick task 260618-p6b complete
 **Resume file**: None
 
 ---
@@ -102,5 +118,6 @@ Plan: Not started
 - [Phase ?]: associative array cache
 - [Phase ?]: CUTOFF_EXCL exclusive next-day-midnight bound replaces T23:59:59Z for all publish-date comparisons in verifier and resolver (CR-01 fix)
 - [Phase 02]: ARG BUILD_DATE + five LABEL lines added to Dockerfile via D-04 pattern (LABEL-via-ARG for portability — provenance travels with image regardless of build entry point)
+- [Phase 03]: check_inference_provider detects unconfigured provider via ANSI-stripped output grep (not exit code — exits 0 in both states); inverted jq -e for NET-04 policy assertion; two-target smoke test (api.anthropic.com + example.com) proves deny-all not just Anthropic-specific block
 - [Phase 02]: build-and-lock.sh --build-date flag added with T-02-01 YYYY-MM-DD allowlist validation before podman build invocation
 - [Phase ?]: [Phase 02]: T-02-01 mitigation — BUILD_DATE allowlist-validated against YYYY-MM-DD regex before podman build invocation; no eval

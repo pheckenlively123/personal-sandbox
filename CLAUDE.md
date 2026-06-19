@@ -6,14 +6,16 @@
 
 A reproducible, network-isolated development sandbox — built as an NVIDIA OpenShell sandbox from a Fedora 44 image — for running Claude Code with `--dangerously-skip-permissions` safely. The sandbox bundles a Go toolchain and the claude-engineering-toolkit plugins, applies supply-chain cooldown pinning to its dependencies, and mounts `~/claudeshared` read-write so the operator can clone repos there and do development with Claude inside the sandbox. It is for a developer who wants to give Claude elevated, autonomous permissions without exposing the host or the open internet.
 
-**Core Value:** Claude can run fully autonomous (`--dangerously-skip-permissions`) inside a sandbox that has **zero direct network egress** — all model inference is brokered through the OpenShell gateway — so elevated permissions can't be used to reach or exfiltrate to the open internet.
+**Core Value:** Claude can run fully autonomous (`--dangerously-skip-permissions`) inside a sandbox with a **three-host, binary-scoped, TLS-opaque Claude egress allowlist** — `api.anthropic.com:443` (inference), `platform.claude.com:443` (Console auth), and `claude.ai:443` (claude.ai auth) — and **nothing else reaches the open internet**. All three are TLS passthrough (no decryption, no credential injection), scoped to the `claude` binary. `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` disables telemetry/auto-update so `statsig.anthropic.com`, `sentry.io`, and `downloads.claude.ai` are never contacted.
+
+**Accepted trade-off:** The subscription OAuth token lives inside the sandbox at `~/.claude/.credentials.json` (written by the in-sandbox `claude` OAuth login flow). Mitigations: egress is restricted to the three Claude auth/API hosts only; the policy is binary-scoped to `claude`; the sandbox is deleted between sessions with `./rebuild.sh down`.
 
 ### Constraints
 
 - **Platform**: Sandbox runtime must be NVIDIA OpenShell — built/managed via the `openshell` CLI on this host.
 - **Build tool**: Container image must be built with podman (`podman build`), not the Docker daemon. The image reference is then handed to `openshell sandbox create --from <image-ref>`.
 - **Base image**: Fedora 44 — base for the sandbox image.
-- **Network**: Running sandbox must have zero direct internet egress; inference via OpenShell gateway only.
+- **Network**: Running sandbox allows ONLY `api.anthropic.com:443`, `platform.claude.com:443`, and `claude.ai:443` (all TLS passthrough, binary-scoped to `claude`). No `statsig.anthropic.com`, no `sentry.io`, no open internet. `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` keeps telemetry/auto-update hosts unused. Claude Code authenticates via in-sandbox subscription OAuth login (no `ANTHROPIC_API_KEY`, no `inference.local` gateway).
 - **Supply chain**: govulncheck, gsd-core (+ all deps), and Claude Code CLI pinned to "latest as of 4 days before build" (rolling). Cooldown window default 4 days.
 - **Install methods**: Go and golangci-lint via RPM; govulncheck via `go install`; gsd-core + Claude Code via their package managers (npm).
 - **Reproducibility**: rebuild must be script-driven and repeatable.
@@ -52,28 +54,20 @@ A reproducible, network-isolated development sandbox — built as an NVIDIA Open
 - OpenShell rejects mount targets that overlap with `/etc/openshell`, `/etc/openshell-tls`, workspace root, or supervisor paths.
 - Named volumes (`type: volume`) do NOT require `enable_bind_mounts = true` unless the named volume itself is bind-backed.
 
-### Gateway Inference Brokering (`inference.local`)
+### Network Policy — Three-Host Claude Egress Allowlist (Architecture B)
 
-- Strips any `Authorization` / API-key header the sandbox provides (the in-sandbox placeholder is never forwarded)
-- Injects the real backend credential from the configured provider record (the `claude-code` subscription login)
-- Rewrites the model to the gateway-configured model
-- Forwards to the upstream Anthropic (or other) endpoint
+- Sandbox allows ONLY three Claude auth/API hosts (all TLS passthrough, proxy never decrypts the stream):
+  - `api.anthropic.com:443` — model inference
+  - `platform.claude.com:443` — Console/Claude account authentication (OAuth)
+  - `claude.ai:443` — claude.ai account authentication (OAuth)
+- Binary-scoped to `/usr/bin/claude` and `/usr/local/bin/claude` — arbitrary processes cannot use the egress hole
+- `statsig.anthropic.com` and `sentry.io` intentionally absent; `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` suppresses those code paths
+- All other egress denied (no `curl google.com`, no git clone at runtime, etc.)
+- NET-05 asserts deny posture via `curl` (blocked by binary-scoping); reachability validated by `./rebuild.sh login`
+- No `inference.local` gateway, no `ANTHROPIC_API_KEY`, no host-side `openshell provider create`
+- Claude Code authenticates via in-sandbox OAuth login: `./rebuild.sh login` → browser URL outside sandbox → paste code
 
-# Register local gateway (already done on this machine):
-
-# Configure inference provider using the existing Claude subscription login:
-
-# ^ loads the existing Claude Code subscription credential from host state
-
-#   (~/.claude/.credentials.json / macOS keychain) — NO api key involved.
-
-#   `openshell provider refresh` handles OAuth token refresh host-side.
-
-#   Exact --type/profile flag confirmed empirically in the inference phase.
-
-# Point inference.local at the provider:
-
-### Zero-Egress Policy
+### Zero-Egress Policy (historical note — superseded by Architecture B)
 
 ## 2. Fedora 44 Base Image
 
@@ -143,10 +137,10 @@ A reproducible, network-isolated development sandbox — built as an NVIDIA Open
 
 # Step 2: Run the installer to deploy hooks/commands into ~/.claude
 
-- `npm install -g @opengsd/gsd-core@VERSION --before=DATE` installs the package and pins all transitive deps to versions released before `DATE`. The `--before` flag applies to direct and transitive dependencies (verified against npm v11 docs).
+- `npm install -g @opengsd/gsd-core@VERSION --before="DATE T23:59:59Z" --ignore-scripts --allow-git=none --allow-remote=none --allow-directory=none` installs the package and pins all transitive deps to versions published on or before the cooldown date. `--before` applies to direct and transitive dependencies (widely supported, works on old and new npm).
 - `gsd-core --claude --global` then runs `bin/install.js` which writes the actual Claude Code integration files (commands, hooks, agent definitions) into `~/.claude/`.
-- `npx` does not support `--before` or `--min-release-age`. Pinning transitive deps requires `npm install`.
-- Using `@latest` without `--before` would resolve to the current latest (1.4.5 as of 2026-06-13), which postdates the cooldown.
+- `npx` does not support `--before`. Pinning transitive deps requires `npm install`.
+- `--ignore-scripts` is safe for gsd-core 1.4.0 — it has no `install`/`preinstall`/`postinstall` scripts; `prepare` does not run for registry installs; real setup is the explicit `gsd-core --claude --global`.
 
 ### npm --before: What It Actually Does
 
@@ -154,7 +148,7 @@ A reproducible, network-isolated development sandbox — built as an NVIDIA Open
 - Applies to **all** transitive dependencies, not just direct dependencies
 - If no version exists before the cutoff for a required package, `npm install` errors
 - When a dist-tag (like `@latest`) is used, it resolves the most recent version within the date filter
-- `--min-release-age=<days>` is the relative equivalent (e.g. `--min-release-age=4`)
+- `--min-release-age=<days>` is the relative equivalent — but is silently ignored by older npm versions (e.g. the version shipped in Fedora 44); always use `--before` for guaranteed compatibility
 
 ## 5. Claude Code CLI
 
@@ -174,11 +168,12 @@ A reproducible, network-isolated development sandbox — built as an NVIDIA Open
 
 ### Install Command in Dockerfile
 
-- Explicit version pin ensures the correct top-level package is installed
-- `--before` ensures all transitive dependencies are also pinned to pre-cooldown versions
-- Claude Code ships frequently (daily releases); without pinning, `@latest` would pull 2.1.177
-- The native installer at `https://claude.ai/install.sh` (or the npm installer triggered by `npx @anthropic-ai/claude-code`) runs interactively and cannot be version-pinned at the transitive dependency level
-- `npm install -g @anthropic-ai/claude-code@VERSION` is the correct containerized approach (no interactive prompts, reproducible)
+- `npm install -g @anthropic-ai/claude-code@VERSION --before="DATE T23:59:59Z" --allow-scripts @anthropic-ai/claude-code --allow-git=none --allow-remote=none --allow-directory=none` installs claude-code and pins the transitive tree to the cooldown date.
+- `--allow-scripts @anthropic-ai/claude-code` is required — claude-code has a first-party `postinstall: node install.cjs` (confirmed on 2.1.169); this permits only its own script and blocks all transitive-dep scripts.
+- Explicit `@VERSION` pin is required; the version is pre-resolved by `resolve-versions.sh` via a live npm registry query on the host before the build.
+- Claude Code ships frequently (daily releases); without an explicit version pin + `--before`, `@latest` would resolve to a post-cooldown version.
+- The native installer at `https://claude.ai/install.sh` (or `npx @anthropic-ai/claude-code`) runs interactively and cannot enforce a transitive date window.
+- `npm install -g @anthropic-ai/claude-code@VERSION --before=DATE` is the correct containerized approach (no interactive prompts, reproducible, version pinned before build)
 
 ### Runtime Configuration
 
@@ -210,6 +205,7 @@ A reproducible, network-isolated development sandbox — built as an NVIDIA Open
 
 | Recommended | Alternative | Why Not |
 |-------------|-------------|---------|
+| `npm install -g pkg@VERSION --before=DATE` (pre-resolved pin + date fence) | `npm install -g pkg --min-release-age=N` (npm 11 native cooldown) | `--min-release-age` is silently ignored by older npm (e.g. Fedora 44's bundled npm) — installs @latest instead of the cooldown version; `--before` is widely supported and reliable across npm versions |
 | `npm install -g pkg@VERSION --before=DATE` | pnpm/yarn date pinning | Neither pnpm nor yarn has an equivalent `--before` that pins transitive deps; yarn resolutions only pin direct deps |
 | `npm install -g pkg@VERSION --before=DATE` | Committing `package-lock.json` | Works but is cumbersome for rolling cooldown: requires re-running `npm install --before` and committing a new lockfile each rebuild |
 | `npm install -g pkg@VERSION --before=DATE` | Registry time-travel proxy (Verdaccio `--snapshot`) | Verdaccio snapshot support exists but adds operational complexity; npm `--before` is sufficient and built-in |
@@ -222,12 +218,16 @@ A reproducible, network-isolated development sandbox — built as an NVIDIA Open
 
 | Avoid | Why | Use Instead |
 |-------|-----|-------------|
-| `npx @opengsd/gsd-core@latest --claude --global` without version pin | `npx` does not support `--before`; `@latest` resolves to post-cooldown version | `npm install -g @opengsd/gsd-core@1.4.0 --before=2026-06-09 && gsd-core --claude --global` |
+| `npx @opengsd/gsd-core@latest --claude --global` | `npx` does not support `--before`; `@latest` resolves to whatever is current | `npm install -g @opengsd/gsd-core@VERSION --before=DATE --ignore-scripts ... && gsd-core --claude --global` |
+| npm install without `--ignore-scripts` for gsd-core | gsd-core 1.4.0 has no install scripts; omitting the flag relies on npm's implicit warn-and-skip default which may change across npm versions | `--ignore-scripts` (explicit and durable) |
+| npm install without `--allow-scripts @anthropic-ai/claude-code` for claude-code | claude-code requires its first-party `postinstall: node install.cjs`; omitting the flag may fail silently if npm defaults change | `--allow-scripts @anthropic-ai/claude-code` (permits only first-party script) |
+| npm install without `--allow-git=none --allow-remote=none --allow-directory=none` | These flags default to `all` (permissive); omitting them leaves git-ref, tarball-URL, and local-directory dependency sources allowed — only registry semver ranges are acceptable in a supply-chain-hardened sandbox | Pass `--allow-git=none --allow-remote=none --allow-directory=none` on every npm install |
 | `claude --allow-dangerously-skip-permissions` | Prompts the user on each risky action; designed for interactive opt-in not autonomous operation | `claude --dangerously-skip-permissions` |
-| `ANTHROPIC_BASE_URL=https://inference.local/v1` | Claude Code appends `/v1/messages`; adding `/v1` in the base URL creates `/v1/v1/messages` (double path) | `ANTHROPIC_BASE_URL=https://inference.local` (no trailing `/v1`) |
-| `--from-existing` provider flag in Dockerfile | Reads from host keychain/environment, not available inside container build | Set credentials via `openshell provider create` on the host before sandbox creation |
+| `ENV ANTHROPIC_BASE_URL=https://inference.local` in Dockerfile | Architecture B does not use inference.local; setting this ENV would point Claude Code at a non-existent gateway | Omit the ENV — Claude Code uses its built-in default (api.anthropic.com) |
+| `protocol: rest` on the api.anthropic.com policy entry | Would terminate TLS and expose the subscription OAuth token to the proxy | Omit `protocol` entirely (TCP passthrough — proxy never decrypts the stream) |
+| `openshell provider create --from-existing` | Architecture B has no host-side provider step; credentials live inside the sandbox | `./rebuild.sh login` (in-sandbox OAuth flow: URL in browser outside → paste code) |
 | `golangci-lint` via `go install` (from upstream) | Bypasses dnf cooldown mechanism; version not controlled by RPM package manager | `dnf install golangci-lint` in Fedora 44 (provides 2.11.3) |
-| `openshell policy update --add-endpoint api.anthropic.com:443` | Defeats zero-egress guarantee; opens direct path to Anthropic bypassing inference.local privacy routing | Use `inference.local` via gateway; no direct egress allowlist needed |
+| Adding `statsig.anthropic.com` or `sentry.io` to network_policies | Expands egress beyond the minimal 3-host Claude allowlist; adds telemetry/error-reporting exfil paths | Keep both absent; `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` prevents contact; if Claude Code is degraded despite this, adding `statsig.anthropic.com:443` is the minimal follow-up |
 
 ## Version Compatibility
 

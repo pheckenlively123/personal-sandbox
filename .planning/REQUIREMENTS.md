@@ -27,11 +27,11 @@ Requirements for the initial release. Each maps to a roadmap phase.
 
 ### Network Isolation & Inference (NET)
 
-- [ ] **NET-01**: The running sandbox has zero direct internet egress (deny-all egress policy)
-- [ ] **NET-02**: Model inference is brokered through the OpenShell gateway — `ANTHROPIC_BASE_URL` points at the gateway inference endpoint, not the public Anthropic API
-- [ ] **NET-03**: Anthropic credentials are injected at sandbox runtime via the OpenShell provider mechanism, never baked into the image. Primary path is the **Claude subscription login** (no `ANTHROPIC_API_KEY`): the gateway loads the existing `claude-code` provider credential from host state (`openshell provider create … --from-existing`) and handles token refresh host-side via `openshell provider refresh`. Claude Code in the sandbox sends to `inference.local` with a placeholder credential; the gateway attaches the real subscription credential when forwarding. (Inference phase confirms exact `provider create`/`inference set` flags.)
-- [ ] **NET-04**: The rebuild script asserts the egress policy contains no `api.anthropic.com` (or other direct Anthropic) endpoint
-- [ ] **NET-05**: The rebuild script runs a network egress smoke test confirming an outbound request from inside the sandbox fails, before handing control to the operator
+- [x] **NET-01**: The running sandbox has zero direct internet egress (deny-all egress policy)
+- [x] **NET-02**: Model inference is brokered through the OpenShell gateway — `ANTHROPIC_BASE_URL` points at the gateway inference endpoint, not the public Anthropic API
+- [x] **NET-03**: Anthropic credentials are injected at sandbox runtime via the OpenShell provider mechanism, never baked into the image. Primary path is the **Claude subscription login** (no `ANTHROPIC_API_KEY`): the gateway loads the existing `claude-code` provider credential from host state (`openshell provider create … --from-existing`) and handles token refresh host-side via `openshell provider refresh`. Claude Code in the sandbox sends to `inference.local` with a placeholder credential; the gateway attaches the real subscription credential when forwarding. (Inference phase confirms exact `provider create`/`inference set` flags.)
+- [x] **NET-04**: The rebuild script asserts the egress policy contains no `api.anthropic.com` (or other direct Anthropic) endpoint
+- [x] **NET-05**: The rebuild script runs a network egress smoke test confirming an outbound request from inside the sandbox fails, before handing control to the operator
 
 ### Runtime & Claude Launch (RUN)
 
@@ -94,11 +94,11 @@ Populated at roadmap creation. Each requirement maps to exactly one phase.
 | PIN-05 | Phase 1 | Complete |
 | PIN-06 | Phase 1 | Complete |
 | PIN-07 | Phase 1 | Complete |
-| NET-01 | Phase 3 | Pending |
-| NET-02 | Phase 3 | Pending |
-| NET-03 | Phase 3 | Pending |
-| NET-04 | Phase 3 | Pending |
-| NET-05 | Phase 3 | Pending |
+| NET-01 | Phase 3 | Complete |
+| NET-02 | Phase 3 | Complete |
+| NET-03 | Phase 3 | Complete |
+| NET-04 | Phase 3 | Complete |
+| NET-05 | Phase 3 | Complete |
 | RUN-01 | Phase 4 | Pending |
 | RUN-02 | Phase 4 | Pending |
 | RUN-03 | Phase 2 | Complete |

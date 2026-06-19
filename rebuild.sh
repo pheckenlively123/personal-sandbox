@@ -361,7 +361,11 @@ case "${VERB}" in
         DELETE_OUT=$(openshell sandbox delete "${SANDBOX_NAME}" 2>&1) && true
         DELETE_RC=$?
         if [[ ${DELETE_RC} -ne 0 ]]; then
-            if echo "${DELETE_OUT}" | grep -q "sandbox not found"; then
+            # openshell wraps long error text across lines with box-drawing chars, so
+            # "sandbox not found" can be split (e.g. 'sandbox not\n  | found'). Normalize
+            # to alphanumerics+whitespace and collapse before matching the not-found case.
+            DELETE_NORM=$(printf '%s' "${DELETE_OUT}" | tr -dc '[:alnum:][:space:]' | tr -s '[:space:]' ' ')
+            if printf '%s' "${DELETE_NORM}" | grep -qi "not found"; then
                 log_info "Sandbox ${SANDBOX_NAME} not found — nothing to delete (idempotent)"
             else
                 log_error "openshell sandbox delete failed: ${DELETE_OUT}"
@@ -432,7 +436,11 @@ log_step 3 "Teardown existing sandbox and images"
 DELETE_OUT=$(openshell sandbox delete "${SANDBOX_NAME}" 2>&1) && true
 DELETE_RC=$?
 if [[ $DELETE_RC -ne 0 ]]; then
-    if echo "${DELETE_OUT}" | grep -q "sandbox not found"; then
+    # openshell wraps long error text across lines with box-drawing chars, so
+    # "sandbox not found" can be split (e.g. 'sandbox not\n  | found'). Normalize
+    # to alphanumerics+whitespace and collapse before matching the not-found case.
+    DELETE_NORM=$(printf '%s' "${DELETE_OUT}" | tr -dc '[:alnum:][:space:]' | tr -s '[:space:]' ' ')
+    if printf '%s' "${DELETE_NORM}" | grep -qi "not found"; then
         log_info "Sandbox ${SANDBOX_NAME} not found — nothing to tear down"
     else
         log_error "openshell sandbox delete failed: ${DELETE_OUT}"

@@ -92,6 +92,7 @@ Plan: 2 of 2
 | fast | rebuild.sh: distinguish gateway-unreachable from not-configured (silent-exit fix) | 2026-06-18 | b25afdd | — |
 | fast | rebuild.sh: check only Gateway inference route (ignore System/sandbox-system) in provider gate | 2026-06-18 | d166241 | — |
 | 260618-qr4 | Automate inference provider setup in rebuild.sh (--model default opus-4-8, --set-model fast-switch, podman autostart, create-or-update) | 2026-06-18 | 4b4337d | [260618-qr4-automate-inference-provider-setup-in-reb](./quick/260618-qr4-automate-inference-provider-setup-in-reb/) |
+| 260619-e0p | Architecture B-hardened redesign: verb-first rebuild.sh, subscription OAuth login, api.anthropic.com-only TLS-passthrough egress (claude-binary-scoped), inverted NET gates; removed inference.local/--model machinery | 2026-06-19 | 4f99856 | [260619-e0p-implement-architecture-b-hardened-rebuil](./quick/260619-e0p-implement-architecture-b-hardened-rebuil/) |
 
 ---
 

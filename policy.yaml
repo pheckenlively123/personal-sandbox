@@ -35,6 +35,10 @@ filesystem_policy:
     - /tmp
     - /dev/null
     - /claudeshared   # Phase 2 addition (RUN-03/RUN-04): host bind mount, read-write
+    - /home/sandbox   # runtime user home (Dockerfile `useradd -m ... sandbox`); claude
+                      # persists ~/.claude/.credentials.json here. Without this grant,
+                      # Landlock (default-deny) blocks the home dir: OAuth login appears
+                      # to succeed in-memory but the token never persists ("not logged in").
 
 landlock:
   compatibility: best_effort

@@ -97,6 +97,7 @@ Plan: 2 of 2
 | fast | rebuild.sh: tolerate wrapped "sandbox not found" in idempotent teardown (openshell miette line-wraps the phrase) | 2026-06-19 | d03d324 | — |
 | 260619-fbi | Add claude.ai + platform.claude.com to egress allowlist (subscription OAuth needs them, not just api.anthropic.com); ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1; NET-04 checks 3 hosts; NET-05 deny-posture-only (curl can't test binary-scoped allows) | 2026-06-19 | a6c8e83 | [260619-fbi-add-claude-auth-hosts-to-egress-allowlis](./quick/260619-fbi-add-claude-auth-hosts-to-egress-allowlis/) |
 | fast | policy.yaml: grant /home/sandbox in filesystem_policy so claude can persist ~/.claude OAuth token (Landlock default-deny blocked runtime home → login didn't persist) | 2026-06-19 | 851eae4 | — |
+| fast | rebuild.sh: connect/login land in /claudeshared via exec --tty --workdir (connect verb has no cwd flag; / is not Landlock-listable) | 2026-06-19 | 6338120 | — |
 
 ---
 

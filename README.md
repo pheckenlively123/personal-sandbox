@@ -1,18 +1,34 @@
 # personal-sandbox
 Create and maintain a personal sandbox using NVIDIA OpenShell on macOS/Linux.
 
-## Architecture B — api.anthropic.com-only direct egress
+## Architecture B — three-host Claude egress allowlist
 
-The sandbox allows Claude Code to connect **directly** to `api.anthropic.com:443` using your
-Claude **subscription OAuth login** (no `ANTHROPIC_API_KEY`, no gateway brokering). The sandbox
-network policy allows **only** `api.anthropic.com:443` — no `statsig.anthropic.com`, no
-`sentry.io`, no open internet. That single egress is binary-scoped to the `claude` executable,
-so arbitrary processes in the autonomous sandbox cannot reach Anthropic.
+The sandbox allows Claude Code to connect **directly** to the three Claude auth/API hosts using
+your Claude **subscription OAuth login** (no `ANTHROPIC_API_KEY`, no gateway brokering):
+
+| Host | Port | Purpose |
+|------|------|---------|
+| `api.anthropic.com` | 443 | Model inference (Claude API) |
+| `platform.claude.com` | 443 | Console/Claude account authentication (OAuth) |
+| `claude.ai` | 443 | claude.ai account authentication (OAuth) |
+
+All three use opaque TLS passthrough (no protocol termination). The policy is binary-scoped to
+the `claude` executable, so arbitrary processes in the autonomous sandbox cannot reach these
+hosts. All other egress is denied.
+
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` is set in the image, which disables Claude Code's
+auto-updater, telemetry (statsig), Sentry error-reporting, and feedback. This keeps
+`statsig.anthropic.com`, `sentry.io`, and `downloads.claude.ai` unused — they are intentionally
+absent from the allowlist and do not need to be added.
+
+**NET-05** (egress smoke test) asserts the deny posture using `curl` (blocked because it is not
+the `claude` binary). **Reachability** of the auth/API hosts is validated functionally by
+`./rebuild.sh login` (which runs the actual `claude` binary).
 
 **Trade-off accepted:** the subscription OAuth token lives at `~/.claude/.credentials.json`
 *inside* the sandbox (written by the in-sandbox login flow). Mitigations: egress is restricted
-to `api.anthropic.com:443` only, and the policy is binary-scoped to `claude`. The sandbox is
-deleted between sessions with `./rebuild.sh down`.
+to the three Claude auth/API hosts only, and the policy is binary-scoped to `claude`. The sandbox
+is deleted between sessions with `./rebuild.sh down`.
 
 ---
 
@@ -57,13 +73,15 @@ tolerates an absent sandbox or images (decision D-02, idempotent). There is no p
    - `--no-tty -- /bin/true` — creates the sandbox without an interactive session
    After create, the script verifies the sandbox reaches `Ready` state before exiting.
 6. **NET-04 policy assertion** — queries the live sandbox policy via `openshell policy get`
-   and aborts if: `api.anthropic.com:443` is missing, has a `protocol` field (would break
-   passthrough), lacks a claude binary scope, or if `statsig.anthropic.com`/`sentry.io` are
-   present. Fatal gate.
-7. **NET-05 egress smoke test** — runs `curl` from inside the sandbox:
-   - `api.anthropic.com` → must be **reachable** (any HTTP status = pass; connection denied = fail)
-   - `statsig.anthropic.com`, `sentry.io`, `www.google.com` → must be **blocked**
-   Both sides are fatal gates (either failure aborts the rebuild).
+   and aborts if any of the three required Claude hosts (`api.anthropic.com`, `platform.claude.com`,
+   `claude.ai`) are missing at port 443, have a `protocol` field (would break passthrough), lack a
+   `claude` binary scope, or if `statsig.anthropic.com`/`sentry.io` are present. Fatal gate.
+7. **NET-05 egress smoke test** — asserts **deny posture only** using `curl` from inside the sandbox.
+   `curl` is not the `claude` binary — binary-scoping blocks it from reaching ANY host, including
+   the allowlisted Claude hosts. The test asserts that non-allowlisted targets are blocked:
+   - `statsig.anthropic.com`, `sentry.io`, `www.google.com` → must be **blocked** (fatal gate)
+   Reachability of the Claude auth/API hosts is validated functionally by `./rebuild.sh login`
+   (the `claude` binary itself), not by `curl`.
 
 ### Shared workspace (`~/claudeshared`)
 
@@ -119,10 +137,13 @@ teardown, or create steps.
 
 ### What to look for in the logs
 
-- **api.anthropic.com connections** — expected (the passthrough allow is active). Confirm all
-  outbound connects from the sandbox go only to `api.anthropic.com`.
+- **Connections to allowlisted hosts** — expected (the passthrough allow is active). Outbound
+  connects from the `claude` binary should go only to `api.anthropic.com`, `platform.claude.com`,
+  or `claude.ai` (during inference and OAuth login flows).
 - **Outbound connection attempts to non-allowlisted hosts** — should be proxy-denied. If you see
-  `statsig.anthropic.com`, `sentry.io`, or any other host, the egress policy is not active.
+  `statsig.anthropic.com`, `sentry.io`, or any other host with a successful connection,
+  the egress policy is not active. (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` suppresses
+  most such attempts at source, so only unexpected traffic would appear.)
 - **Landlock denials** — indicate a filesystem operation outside the policy.
 
 ---
@@ -156,8 +177,9 @@ After a successful `./rebuild.sh` (all gates PASS) and `./rebuild.sh login` (OAu
    ```
    **Note:** Use `--dangerously-skip-permissions` (not `--allow-dangerously-skip-permissions`).
 
-4. Send at least two messages and confirm model responses are returned. Both round-trips should
-   succeed going **direct to `api.anthropic.com`** (confirmed by the NET-05 smoke test above).
+4. Send at least two messages and confirm model responses are returned. Round-trips go direct
+   to `api.anthropic.com` (inference) via the policy passthrough. OAuth login touched
+   `platform.claude.com` and/or `claude.ai` — both are in the allowlist.
 
 5. Verify that `statsig.anthropic.com` and `sentry.io` are blocked. From inside the sandbox:
    ```bash

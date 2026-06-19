@@ -40,6 +40,11 @@ RUN node --version && npm --version
 # GOPATH/bin must be on PATH for the binary to be found at runtime.
 ENV GOPATH=/root/go
 ENV PATH="${PATH}:/root/go/bin"
+
+# Disable Claude Code non-essential traffic (auto-updater, telemetry, Sentry error-reporting,
+# feedback). This ensures statsig.anthropic.com, sentry.io, and downloads.claude.ai are never
+# contacted — keeping the zero-egress policy clean without needing those hosts in the allowlist.
+ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 RUN go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
 
 # Step 4: gsd-core via npm — explicit version pin + --before date (PIN-04, D-02).

@@ -9,13 +9,15 @@
 #   ./rebuild.sh down                             # Delete sandbox (idempotent)
 #   ./rebuild.sh audit [--since <ts>]             # Surface openshell logs
 #
-# Architecture B — hardened to api.anthropic.com-only direct egress:
-#   - Claude Code runs INSIDE the sandbox and connects DIRECTLY to api.anthropic.com:443
+# Architecture B — hardened to claude-egress-allowlist direct egress:
+#   - Claude Code runs INSIDE the sandbox and connects DIRECTLY to the three Claude hosts:
+#     api.anthropic.com (inference), platform.claude.com (Console auth), claude.ai (auth)
 #   - Subscription OAuth login: `./rebuild.sh login` → open URL in browser OUTSIDE the
 #     sandbox → paste the returned code into the in-sandbox prompt. One-time per session.
 #   - No inference.local gateway. No ANTHROPIC_API_KEY. No host-side provider setup.
-#   - The sandbox policy allows ONLY api.anthropic.com:443 (TLS passthrough, binary-scoped
-#     to /usr/bin/claude and /usr/local/bin/claude). All other egress is denied.
+#   - The sandbox policy allows ONLY the three Claude auth/API hosts (TLS passthrough,
+#     binary-scoped to /usr/bin/claude and /usr/local/bin/claude). All other egress denied.
+#   - CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 keeps statsig/sentry/downloads unused.
 #   - On-the-fly model selection via Claude's native /model command (Opus/Sonnet/Haiku).
 #
 # Steps (rebuild verb):
@@ -24,10 +26,10 @@
 #   3. Tag :latest alias
 #   4. Teardown existing sandbox and images (tolerate-absent — idempotent)
 #   5. Create sandbox with ~/claudeshared bind mount and policy.yaml
-#   6. NET-04: Assert effective live policy = anthropic-only passthrough, claude-scoped,
-#      no statsig.anthropic.com, no sentry.io (FATAL)
-#   7. NET-05: In-sandbox curl — api.anthropic.com REACHABLE; statsig.anthropic.com,
-#      sentry.io, www.google.com BLOCKED (FATAL)
+#   6. NET-04: Assert effective live policy = all 3 claude-egress hosts present, passthrough,
+#      claude-scoped, no statsig.anthropic.com, no sentry.io (FATAL)
+#   7. NET-05: In-sandbox curl — assert deny posture ONLY (statsig/sentry/google BLOCKED);
+#      claude-host reachability validated functionally by ./rebuild.sh login (FATAL)
 #
 # Decisions:
 #   D-01: Full clean rebuild every run (tear down existing sandbox + images before create)
@@ -96,43 +98,48 @@ ensure_podman_ready() {
 }
 
 # ---------------------------------------------------------------------------
-# NET-04 live policy assertion — anthropic-only passthrough, claude-scoped (Finding 5)
+# NET-04 live policy assertion — claude-egress allowlist, passthrough, claude-scoped (Finding 5)
 # ---------------------------------------------------------------------------
 # Asserts the live effective sandbox policy:
-#   PASS requires: api.anthropic.com:443 present, no `protocol` field (passthrough),
-#                  binaries[].path matches */claude, statsig.anthropic.com ABSENT,
-#                  sentry.io ABSENT, no protocol:rest on any Anthropic endpoint.
+#   PASS requires: api.anthropic.com:443, platform.claude.com:443, and claude.ai:443 all
+#                  present with no `protocol` field (passthrough), at least one binary entry
+#                  matching */claude, statsig.anthropic.com ABSENT, sentry.io ABSENT.
 #   FAIL on any violation — fatal (exit 1).
-assert_anthropic_only_egress() {
+assert_claude_egress_allowlist() {
     local sandbox_name="${1}"
     local policy_json
     policy_json=$(openshell policy get "${sandbox_name}" --full -o json 2>&1)
 
-    # --- Require api.anthropic.com:443 to be present ---
-    if ! echo "${policy_json}" | jq -e \
-        '.policy.network_policies // {} | to_entries[] | .value.endpoints[]? | select(.host == "api.anthropic.com" and .port == 443)' \
-        >/dev/null 2>&1; then
-        log_error "NET-04 VIOLATION: api.anthropic.com:443 NOT found in effective policy — passthrough allow missing!"
-        log_error "Policy output: ${policy_json}"
-        exit 1
-    fi
-    log_info "NET-04: api.anthropic.com:443 present in policy"
+    # --- Require all three Claude auth/API hosts to be present ---
+    local -a required_hosts=("api.anthropic.com" "platform.claude.com" "claude.ai")
+    for req_host in "${required_hosts[@]}"; do
+        if ! echo "${policy_json}" | jq -e \
+            --arg h "${req_host}" \
+            '.policy.network_policies // {} | to_entries[] | .value.endpoints[]? | select(.host == $h and .port == 443)' \
+            >/dev/null 2>&1; then
+            log_error "NET-04 VIOLATION: ${req_host}:443 NOT found in effective policy — passthrough allow missing!"
+            log_error "Policy output: ${policy_json}"
+            exit 1
+        fi
+        log_info "NET-04: ${req_host}:443 present in policy"
 
-    # --- Require NO protocol field on api.anthropic.com (passthrough = omit protocol) ---
-    if echo "${policy_json}" | jq -e \
-        '.policy.network_policies // {} | to_entries[] | .value.endpoints[]? | select(.host == "api.anthropic.com") | select(.protocol != null)' \
-        >/dev/null 2>&1; then
-        log_error "NET-04 VIOLATION: api.anthropic.com endpoint has a 'protocol' field — must be omitted for TLS passthrough!"
-        log_error "Policy output: ${policy_json}"
-        exit 1
-    fi
-    log_info "NET-04: api.anthropic.com endpoint has no 'protocol' field (opaque passthrough confirmed)"
+        # --- Require NO protocol field on this host (passthrough = omit protocol) ---
+        if echo "${policy_json}" | jq -e \
+            --arg h "${req_host}" \
+            '.policy.network_policies // {} | to_entries[] | .value.endpoints[]? | select(.host == $h) | select(.protocol != null)' \
+            >/dev/null 2>&1; then
+            log_error "NET-04 VIOLATION: ${req_host} endpoint has a 'protocol' field — must be omitted for TLS passthrough!"
+            log_error "Policy output: ${policy_json}"
+            exit 1
+        fi
+        log_info "NET-04: ${req_host} endpoint has no 'protocol' field (opaque passthrough confirmed)"
+    done
 
-    # --- Require at least one binary scoped to */claude ---
+    # --- Require at least one binary scoped to */claude (check via api.anthropic.com policy entry) ---
     if ! echo "${policy_json}" | jq -e \
         '.policy.network_policies // {} | to_entries[] | .value | select(.endpoints[]? | .host == "api.anthropic.com") | .binaries[]? | select(.path | test(".*/claude$"))' \
         >/dev/null 2>&1; then
-        log_error "NET-04 VIOLATION: api.anthropic.com policy has no binary entry matching */claude!"
+        log_error "NET-04 VIOLATION: claude-egress policy has no binary entry matching */claude!"
         log_error "Policy output: ${policy_json}"
         exit 1
     fi
@@ -158,35 +165,30 @@ assert_anthropic_only_egress() {
     fi
     log_info "NET-04: sentry.io absent (error-reporting blocked)"
 
-    log_info "NET-04 PASS: api.anthropic.com:443 passthrough, claude-scoped; statsig+sentry absent"
+    log_info "NET-04 PASS: api.anthropic.com, platform.claude.com, claude.ai — all :443 passthrough, claude-scoped; statsig+sentry absent"
 }
 
 # ---------------------------------------------------------------------------
-# NET-05 egress smoke test — inverted gates (Finding 5)
+# NET-05 egress smoke test — deny posture only (Finding 5; redesigned post-login-debugging)
 # ---------------------------------------------------------------------------
-# api.anthropic.com   → must be REACHABLE (any HTTP status = PASS; connect-refused = FAIL)
-# statsig.anthropic.com → must be BLOCKED (curl connect failure = PASS; any connect = FAIL)
-# sentry.io             → must be BLOCKED
-# www.google.com        → must be BLOCKED (proves deny-all-except-allowlist)
+# Asserts that non-allowlisted hosts are BLOCKED from inside the sandbox.
+# curl is NOT the claude binary — binary-scoping prevents curl from reaching ANY host,
+# including api.anthropic.com. Reachability of the Claude auth/API hosts is validated
+# functionally by `./rebuild.sh login` (the claude binary), NOT by curl.
 #
-# Uses `curl -sS -o /dev/null -w '%{http_code}' --max-time 8`.
-# For anthropic: any non-empty HTTP status string (including 4xx/5xx) = proxy allowed stream = PASS.
-# For blocked targets: curl exit 7/35/28-class or empty status = proxy denied = PASS.
+# Blocked targets (each must fail to connect):
+#   statsig.anthropic.com → BLOCKED (telemetry — intentionally absent from allowlist)
+#   sentry.io             → BLOCKED (error-reporting — intentionally absent)
+#   www.google.com        → BLOCKED (open internet — proves deny-all-except-allowlist)
+#
+# curl exit != 0 OR status 000/empty = proxy denied = PASS.
+# curl exit 0  AND non-000 status    = proxy allowed = FAIL (deny-all is broken).
 run_egress_smoke_test() {
     local sandbox_name="${1}"
 
-    # --- api.anthropic.com must be REACHABLE ---
-    local anthropic_rc=0 anthropic_status=""
-    anthropic_status=$(openshell sandbox exec --name "${sandbox_name}" --no-tty \
-        -- curl -sS -o /dev/null -w '%{http_code}' --max-time 8 \
-        "https://api.anthropic.com" 2>/dev/null) || anthropic_rc=$?
-
-    if [[ ${anthropic_rc} -ne 0 || -z "${anthropic_status}" || "${anthropic_status}" == "000" ]]; then
-        log_error "NET-05 VIOLATION: api.anthropic.com is BLOCKED (curl exit ${anthropic_rc}, status='${anthropic_status}')"
-        log_error "The network policy passthrough to api.anthropic.com:443 is not active!"
-        exit 1
-    fi
-    log_info "NET-05 PASS: api.anthropic.com reachable (HTTP ${anthropic_status})"
+    log_info "NET-05: Anthropic auth/API host reachability is validated by './rebuild.sh login' (claude binary)."
+    log_info "NET-05: curl is not the claude binary — binary-scoping blocks curl from reaching ANY host."
+    log_info "NET-05: Asserting deny posture only (non-allowlisted hosts must be blocked)..."
 
     # --- Blocked targets: each must fail to connect ---
     local -a blocked_targets=("https://statsig.anthropic.com" "https://sentry.io" "https://www.google.com")
@@ -203,7 +205,7 @@ run_egress_smoke_test() {
         log_info "NET-05 PASS: ${target} blocked (curl exit ${rc}, status='${status}')"
     done
 
-    log_info "NET-05 PASS: All blocked targets confirmed denied; api.anthropic.com reachable"
+    log_info "NET-05 PASS: All non-allowlisted targets confirmed denied"
 }
 
 # ---------------------------------------------------------------------------
@@ -492,7 +494,7 @@ log_info "Bind source: ${CLAUDESHARED_ABS}"
 
 # BLD-06: always use the full local image ref (localhost/claude-sandbox:<date>)
 # CLAUDE.md: source must be an absolute path (never ~); bind mount schema uses type/source/target/read_only
-# policy.yaml carries the api.anthropic.com:443 passthrough allow (architecture B-hardened)
+# policy.yaml carries the claude-egress allowlist (api.anthropic.com + platform.claude.com + claude.ai — architecture B-hardened)
 openshell sandbox create \
     --name "${SANDBOX_NAME}" \
     --from "localhost/claude-sandbox:${BUILD_DATE}" \
@@ -513,15 +515,15 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 5: Assert anthropic-only passthrough, claude-scoped, no statsig/sentry (NET-04)
+# Step 5: Assert claude-egress allowlist — all 3 hosts, passthrough, claude-scoped (NET-04)
 # ---------------------------------------------------------------------------
-log_step 5 "NET-04 — Assert anthropic-only egress in live policy (passthrough, claude-scoped)"
-assert_anthropic_only_egress "${SANDBOX_NAME}"
+log_step 5 "NET-04 — Assert claude-egress allowlist in live policy (3 hosts, passthrough, claude-scoped)"
+assert_claude_egress_allowlist "${SANDBOX_NAME}"
 
 # ---------------------------------------------------------------------------
-# Step 6: Egress smoke test — api.anthropic.com reachable; others blocked (NET-05)
+# Step 6: Egress smoke test — deny posture only (NET-05)
 # ---------------------------------------------------------------------------
-log_step 6 "NET-05 — Egress smoke test (in-sandbox curl)"
+log_step 6 "NET-05 — Egress smoke test: deny posture (statsig/sentry/google blocked)"
 run_egress_smoke_test "${SANDBOX_NAME}"
 
 echo "" >&2
@@ -529,8 +531,8 @@ log_info "rebuild.sh complete — sandbox ${SANDBOX_NAME} is Ready"
 log_info "  Image:          localhost/claude-sandbox:${BUILD_DATE}"
 log_info "  Bind mount:     ${CLAUDESHARED_ABS} -> /claudeshared (read-write)"
 log_info "  Policy:         ${PROJECT_ROOT}/policy.yaml"
-log_info "  NET-04:         PASS (api.anthropic.com:443 passthrough, claude-scoped; statsig+sentry absent)"
-log_info "  NET-05:         PASS (api.anthropic.com reachable; statsig/sentry/google blocked)"
+log_info "  NET-04:         PASS (api.anthropic.com + platform.claude.com + claude.ai — :443 passthrough, claude-scoped; statsig+sentry absent)"
+log_info "  NET-05:         PASS (deny posture: statsig/sentry/google blocked; claude-host reachability via ./rebuild.sh login)"
 log_info ""
 log_info "Next step — subscription OAuth login (one-time per session):"
 log_info "  ./rebuild.sh login"

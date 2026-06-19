@@ -1,6 +1,6 @@
 # policy.yaml — OpenShell sandbox policy
 # Source: the live built-in default policy (`openshell policy get <sb> --full -o json`),
-# extended with /claudeshared and the api.anthropic.com:443 passthrough allow.
+# extended with /claudeshared and the Claude auth/API egress passthrough allows.
 #
 # This file is passed to `openshell sandbox create --policy ./policy.yaml`.
 # IMPORTANT: `--policy` OVERRIDES the built-in default policy entirely — it does NOT
@@ -12,10 +12,12 @@
 # OpenShell supervisor needs to set up its network namespace, causing the sandbox
 # to fail provisioning with "Permission denied (os error 13)".
 #
-# Architecture B (hardened): single api.anthropic.com:443 passthrough allow, binary-scoped
-# to the claude executable. No protocol field = opaque TCP/TLS passthrough (proxy never
-# decrypts the OAuth stream). statsig.anthropic.com and sentry.io are intentionally absent
-# to minimize telemetry/exfil surface. All other egress remains denied.
+# Architecture B (hardened): three-host Claude egress allowlist, binary-scoped to the
+# claude executable. No protocol field = opaque TCP/TLS passthrough (proxy never
+# decrypts the OAuth stream). statsig.anthropic.com and sentry.io are intentionally
+# absent — CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 (set in Dockerfile) disables
+# auto-updater, telemetry, Sentry error-reporting, and feedback so these hosts are
+# never contacted. All other egress remains denied.
 version: 1
 
 filesystem_policy:
@@ -41,30 +43,43 @@ process:
   run_as_group: sandbox
   run_as_user: sandbox
 
-# Network egress policy — Architecture B (hardened to api.anthropic.com-only direct egress).
+# Network egress policy — Architecture B (hardened; three-host Claude auth/API allowlist).
 #
-# Allows ONLY api.anthropic.com:443 as an opaque TLS passthrough, restricted to the claude
-# binary. Omitting `protocol` is mandatory — it produces an opaque TCP/TLS passthrough stream
-# (the proxy never terminates TLS or decrypts the OAuth bearer token). Using `protocol: rest`
-# would terminate TLS and expose the subscription token, and is explicitly NOT used here.
+# Allows ONLY the three hosts the Claude Code binary requires for inference and subscription
+# OAuth authentication:
+#   - api.anthropic.com:443  — model inference (Claude API)
+#   - platform.claude.com:443 — Console/Claude account authentication (OAuth)
+#   - claude.ai:443           — claude.ai account authentication (OAuth)
+#
+# All three entries are opaque TLS passthroughs: omitting `protocol` is mandatory — it
+# produces an opaque TCP/TLS passthrough stream (the proxy never terminates TLS or
+# decrypts the subscription token). Using `protocol: rest` would terminate TLS and expose
+# the token, and is explicitly NOT used here.
 # Reference: docs/reference/policy-schema.mdx:158, docs/sandboxes/policies.mdx:59.
 #
-# `binaries:` scope: only /usr/bin/claude and /usr/local/bin/claude may open connections to
-# api.anthropic.com. Claude Code (a Node.js script) is matched via the ancestor/declared-path
+# `binaries:` scope: only /usr/bin/claude and /usr/local/bin/claude may open connections
+# to these hosts. Claude Code (a Node.js script) is matched via the ancestor/declared-path
 # logic in the OPA engine (opa.rs:42-53, test ancestor_binary_allowed at :1477-1500). Both
 # candidate paths are listed for robustness (npm global bin on Fedora RPM nodejs is /usr/bin;
 # /usr/local/bin/claude is also listed in case of a non-standard npm prefix).
 #
-# statsig.anthropic.com and sentry.io are intentionally omitted (no telemetry/error-reporting
-# egress). If Claude Code shows degraded behavior, adding statsig.anthropic.com:443 as a
-# passthrough entry here (same shape, same binaries scope) is the minimal follow-up.
+# statsig.anthropic.com and sentry.io are intentionally omitted. CLAUDE_CODE_DISABLE_
+# NONESSENTIAL_TRAFFIC=1 (Dockerfile ENV) disables the telemetry/auto-update/Sentry code
+# paths so those hosts are never contacted. NET-05 verifies deny posture; reachability of
+# the auth/API hosts is validated functionally by `./rebuild.sh login` (the claude binary).
 network_policies:
-  anthropic_api:
-    name: anthropic-api
+  claude_egress:
+    name: claude-egress
     endpoints:
       - host: api.anthropic.com
         port: 443
-        # NO protocol field -> opaque TCP/TLS passthrough; proxy never decrypts the OAuth stream.
+        # NO protocol field -> opaque TCP/TLS passthrough; proxy never decrypts the stream.
+      - host: platform.claude.com
+        port: 443
+        # NO protocol field -> opaque TCP/TLS passthrough (Console/Claude account OAuth).
+      - host: claude.ai
+        port: 443
+        # NO protocol field -> opaque TCP/TLS passthrough (claude.ai account OAuth).
     binaries:
       - { path: /usr/bin/claude }
       - { path: /usr/local/bin/claude }

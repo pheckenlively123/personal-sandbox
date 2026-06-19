@@ -1,5 +1,20 @@
 # personal-sandbox
-Create and maintain a personal sandbox using NVIDIA sandbox on MacOS
+Create and maintain a personal sandbox using NVIDIA OpenShell on macOS/Linux.
+
+## Architecture B — api.anthropic.com-only direct egress
+
+The sandbox allows Claude Code to connect **directly** to `api.anthropic.com:443` using your
+Claude **subscription OAuth login** (no `ANTHROPIC_API_KEY`, no gateway brokering). The sandbox
+network policy allows **only** `api.anthropic.com:443` — no `statsig.anthropic.com`, no
+`sentry.io`, no open internet. That single egress is binary-scoped to the `claude` executable,
+so arbitrary processes in the autonomous sandbox cannot reach Anthropic.
+
+**Trade-off accepted:** the subscription OAuth token lives at `~/.claude/.credentials.json`
+*inside* the sandbox (written by the in-sandbox login flow). Mitigations: egress is restricted
+to `api.anthropic.com:443` only, and the policy is binary-scoped to `claude`. The sandbox is
+deleted between sessions with `./rebuild.sh down`.
+
+---
 
 ## Rebuilding the sandbox
 
@@ -11,35 +26,24 @@ project root:
 ```
 
 Each run is a **full clean rebuild** (decision D-01): it tears down any existing `claude-sandbox`
-and all `localhost/claude-sandbox:*` images before creating a fresh sandbox. This means rebuilding
-is safe to run at any time — the teardown step tolerates an absent sandbox or images (decision D-02,
-idempotent). There is no partial-update path.
+and all `localhost/claude-sandbox:*` images before creating a fresh sandbox. The teardown step
+tolerates an absent sandbox or images (decision D-02, idempotent). There is no partial-update path.
 
-### Options
+### Available verbs
 
 ```
-./rebuild.sh [--cooldown-days N] [--model <id>]   # Full rebuild; override cooldown window or gateway model
-./rebuild.sh --set-model <id>                      # Configure inference provider + gateway model only, then exit
-./rebuild.sh --audit                               # Surface openshell logs without rebuilding (see below)
+./rebuild.sh [rebuild] [--cooldown-days N]  # Full clean rebuild (default)
+./rebuild.sh status                          # Status summary (read-only)
+./rebuild.sh connect                         # Attach to running sandbox shell
+./rebuild.sh login                           # Connect + guide through Claude OAuth flow
+./rebuild.sh down                            # Delete sandbox (idempotent; no native stop)
+./rebuild.sh audit [--since <ts>]            # Surface openshell logs without rebuilding
 ```
 
-`--model <id>` sets the gateway model used for this rebuild (default: `claude-opus-4-8`).
-
-`--set-model <id>` is the fast-switch path: it configures the inference provider and sets the gateway
-model without running a full rebuild (no image build, teardown, or sandbox create). Use this to change
-the model between sessions. After switching, start a **new Claude session** so Claude Code picks up the
-new model. The OpenShell gateway hard-overrides the model for all requests — one model per gateway, by
-design; per-request model selection is not supported.
+`--cooldown-days N` overrides the supply-chain cooldown window (default: 4 days).
 
 ### What the rebuild does
 
-0. **Ensure inference provider** — idempotently creates or updates the `claude-code` inference
-   provider and sets the gateway model (`--model`, default `claude-opus-4-8`) before any image
-   build. Includes podman autostart (starts the podman machine if not running). The only host
-   prerequisite is being logged into Claude Code on the host (`~/.claude/.credentials.json` /
-   macOS keychain — OAuth, no API key); `rebuild.sh` does the rest. After ensuring, runs a
-   provider preflight to confirm the gateway is reachable, preventing the ~290s hang (OpenShell
-   #759).
 1. **Preflight** — verifies `podman`, `openshell`, `python3`, and `jq` are on `PATH`.
 2. **Resolve + build** — delegates to `scripts/build-and-lock.sh`, which resolves cooldown-pinned
    versions and runs `podman build`. The image is tagged `localhost/claude-sandbox:<YYYY-MM-DD>`.
@@ -47,21 +51,19 @@ design; per-request model selection is not supported.
 4. **Teardown** — deletes the existing `claude-sandbox` sandbox (tolerate-absent) and removes
    old `localhost/claude-sandbox:*` images from the podman store.
 5. **Create** — runs `openshell sandbox create --from localhost/claude-sandbox:<date>` with:
-   - `--policy ./policy.yaml` — grants the sandbox Landlock write access to `/claudeshared`
+   - `--policy ./policy.yaml` — grants Landlock write access to `/claudeshared`; sets the
+     `api.anthropic.com:443` passthrough network policy (binary-scoped to `claude`)
    - `--driver-config-json` bind mount: `$HOME/claudeshared` → `/claudeshared` (read-write)
    - `--no-tty -- /bin/true` — creates the sandbox without an interactive session
-
    After create, the script verifies the sandbox reaches `Ready` state before exiting.
-
 6. **NET-04 policy assertion** — queries the live sandbox policy via `openshell policy get`
-   and exits non-zero if any direct Anthropic endpoint is found. Confirms zero-egress is
-   enforced at the policy level (not just assumed from the source YAML).
-7. **NET-05 egress smoke test** — runs `curl` from inside the sandbox against two independent
-   targets (`https://api.anthropic.com` and `https://example.com`). Exits non-zero if either
-   connection succeeds (proving deny-all, not just an Anthropic-specific block).
-8. **D-06 round-trip (non-fatal)** — fires one model request through `inference.local` from
-   inside the sandbox and reports PASS or WARN in the final summary banner. Never blocks the
-   rebuild — WARN means the inference provider setup (above) is not yet complete.
+   and aborts if: `api.anthropic.com:443` is missing, has a `protocol` field (would break
+   passthrough), lacks a claude binary scope, or if `statsig.anthropic.com`/`sentry.io` are
+   present. Fatal gate.
+7. **NET-05 egress smoke test** — runs `curl` from inside the sandbox:
+   - `api.anthropic.com` → must be **reachable** (any HTTP status = pass; connection denied = fail)
+   - `statsig.anthropic.com`, `sentry.io`, `www.google.com` → must be **blocked**
+   Both sides are fatal gates (either failure aborts the rebuild).
 
 ### Shared workspace (`~/claudeshared`)
 
@@ -72,116 +74,110 @@ Files written by the in-sandbox agent at `/claudeshared` appear on the host owne
 
 ---
 
-## Post-session egress audit
+## Claude subscription login (one-time per session)
 
-After a Claude session, you can surface the sandbox's network activity logs with:
+There is no host-side credential step. Claude Code performs the OAuth subscription login the
+first time it runs inside the sandbox. Run:
 
 ```bash
-./rebuild.sh --audit
+./rebuild.sh login
 ```
 
-This runs `openshell logs claude-sandbox --source all` and prints the output to your terminal.
-It exits immediately without running any build, teardown, or create steps.
+This attaches to the running sandbox and prints guidance. Once inside, run:
 
-### What to look for in the logs
+```bash
+claude
+```
 
-Review the output for outbound connection attempts or denials. Specifically:
+Claude Code will print a login URL. **Open that URL in a browser outside the sandbox**, authenticate
+with your Claude subscription, then paste the returned code back into the in-sandbox prompt. The
+token is stored at `~/.claude/.credentials.json` *inside* the sandbox.
 
-- **Outbound connection attempts to non-gateway hosts** — should not appear; all model inference
-  is routed through `inference.local` (the OpenShell gateway). If you see direct connections to
-  `api.anthropic.com` or other external hosts, the egress policy is not active.
-- **Landlock denials** — indicate the sandbox attempted a filesystem operation outside its policy.
-  A denial at `/claudeshared` means `policy.yaml` was not applied correctly.
+After login, Claude Code uses the subscription credential for all subsequent requests (going
+directly to `api.anthropic.com:443` via the policy passthrough). **No `ANTHROPIC_API_KEY`
+is ever needed or used.**
 
-**Note:** `--audit` only surfaces logs for after-the-fact review. It does not assert or verify the
-egress policy. Zero-egress enforcement (empty `network_policies` in a sandbox policy) is delivered
-in Phase 3 of this project. The `--audit` flag is the BLD-05 operator review surface; treat it as
-an observation tool, not a security gate.
+**Model selection:** Claude Code's native `/model` command (Opus/Sonnet/Haiku) works normally —
+there is no gateway model override. Switch models mid-session with `/model`.
+
+**Token lifetime:** The OAuth token is stored inside the sandbox. `./rebuild.sh down` deletes the
+sandbox (and the token). You will need to re-run `./rebuild.sh login` after each rebuild+down cycle.
 
 ---
 
-## Inference provider setup (automated by rebuild.sh)
+## Post-session egress audit
 
-**This is now automated.** `rebuild.sh` idempotently creates or updates the `claude-code`
-inference provider and sets the gateway model at Step 0 before every build. You do not need
-to run any manual `openshell provider create` or `openshell inference set` commands.
-
-**The only host prerequisite is being logged into Claude Code on the host** — `rebuild.sh`
-reads your existing Claude Code OAuth state via `--from-existing`
-(`~/.claude/.credentials.json` / macOS keychain). No `ANTHROPIC_API_KEY` is involved.
-
-Credentials are never baked into the image or Dockerfile (NET-03/D-04): the OpenShell gateway
-injects the real subscription credential host-side when forwarding requests, so the sandbox
-itself never holds a real token. `openshell inference get` will show `System inference: Not
-configured` alongside the configured Gateway inference route — this is expected. The system
-route is only used by platform/agent-harness functions, not by Claude Code; only the Gateway
-inference route matters (and it is what `rebuild.sh` configures).
-
-What `rebuild.sh` runs under the hood (for reference):
+After a Claude session, surface the sandbox's network activity logs with:
 
 ```bash
-# If provider not present:
-openshell provider create --name claude-code --type claude-code --from-existing
-# If provider already present (re-sync OAuth token):
-openshell provider update claude-code --from-existing
-
-# Set gateway model (--model flag, default claude-opus-4-8):
-openshell inference set --provider claude-code --model claude-opus-4-8
+./rebuild.sh audit
+./rebuild.sh audit --since 2026-06-19T00:00:00Z   # filter by timestamp
 ```
 
-**Switching models between sessions** — the OpenShell gateway hard-overrides the model for
-all requests (one model per gateway, by design). To switch without a full rebuild:
+This runs `openshell logs claude-sandbox --source all` and exits without running any build,
+teardown, or create steps.
 
-```bash
-./rebuild.sh --set-model claude-sonnet-4-5
-```
+### What to look for in the logs
 
-Then start a **new Claude session** to pick up the change.
+- **api.anthropic.com connections** — expected (the passthrough allow is active). Confirm all
+  outbound connects from the sandbox go only to `api.anthropic.com`.
+- **Outbound connection attempts to non-allowlisted hosts** — should be proxy-denied. If you see
+  `statsig.anthropic.com`, `sentry.io`, or any other host, the egress policy is not active.
+- **Landlock denials** — indicate a filesystem operation outside the policy.
 
-To verify the current provider configuration:
+---
 
-```bash
-openshell inference get
-openshell provider refresh status claude-code
-```
+## Widening the allowlist (if needed)
+
+`statsig.anthropic.com` and `sentry.io` are intentionally blocked to minimize telemetry/exfil
+surface. If Claude Code shows degraded behavior (noisy startup errors, feature gates not working),
+the minimal follow-up is to add `statsig.anthropic.com:443` as a passthrough entry in `policy.yaml`
+(same shape as the `api.anthropic.com` entry, same `binaries` scope). Do NOT add `sentry.io` unless
+strictly required — it is an external crash-reporting host.
 
 ---
 
 ## Operator validation checklist
 
-After a successful `./rebuild.sh` (all gates PASS), confirm the full multi-turn interactive session
-works (criterion #2: live multi-turn interactive session, ≥2 round-trips):
+After a successful `./rebuild.sh` (all gates PASS) and `./rebuild.sh login` (OAuth complete):
 
 ### Steps
 
-1. Connect to the running sandbox:
+1. Confirm NET-04 and NET-05 both printed `PASS` in the rebuild output.
 
+2. Connect to the running sandbox:
    ```bash
-   openshell sandbox connect claude-sandbox
+   ./rebuild.sh connect
    ```
 
-2. Inside the sandbox, start Claude in fully-autonomous mode:
-
+3. Inside the sandbox, start Claude in fully-autonomous mode:
    ```bash
    claude --dangerously-skip-permissions
    ```
-
    **Note:** Use `--dangerously-skip-permissions` (not `--allow-dangerously-skip-permissions`).
-   The latter prompts interactively on each risky action and is not suitable for autonomous operation.
 
-3. Send at least two messages and confirm model responses are returned. Both round-trips should
-   succeed through `inference.local` (the OpenShell gateway), with no direct egress to
-   `api.anthropic.com` (confirmed by the NET-05 smoke test and NET-04 policy assertion earlier
-   in the rebuild).
+4. Send at least two messages and confirm model responses are returned. Both round-trips should
+   succeed going **direct to `api.anthropic.com`** (confirmed by the NET-05 smoke test above).
 
-4. Exit Claude and the sandbox session when done:
+5. Verify that `statsig.anthropic.com` and `sentry.io` are blocked. From inside the sandbox:
+   ```bash
+   curl --max-time 5 https://statsig.anthropic.com   # should fail (connection denied)
+   curl --max-time 5 https://sentry.io               # should fail (connection denied)
+   curl --max-time 5 https://www.google.com          # should fail (connection denied)
+   ```
 
+6. Optionally confirm model switching:
+   ```bash
+   /model   # switch to Sonnet or Haiku mid-session
+   ```
+
+7. Exit Claude and the sandbox session when done:
    ```bash
    /exit
    exit
    ```
 
 If model responses are not returned, check:
-- `./rebuild.sh --audit` for connection errors in the sandbox logs
-- `openshell provider refresh status claude-code` on the host (credential may need refresh)
-- `openshell inference get` to confirm the provider is still registered
+- `./rebuild.sh audit` for connection errors in the sandbox logs
+- Confirm the OAuth login completed (`~/.claude/.credentials.json` exists inside the sandbox)
+- Re-run `./rebuild.sh login` if the token may have expired

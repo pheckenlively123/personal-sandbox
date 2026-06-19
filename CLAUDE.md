@@ -6,14 +6,16 @@
 
 A reproducible, network-isolated development sandbox — built as an NVIDIA OpenShell sandbox from a Fedora 44 image — for running Claude Code with `--dangerously-skip-permissions` safely. The sandbox bundles a Go toolchain and the claude-engineering-toolkit plugins, applies supply-chain cooldown pinning to its dependencies, and mounts `~/claudeshared` read-write so the operator can clone repos there and do development with Claude inside the sandbox. It is for a developer who wants to give Claude elevated, autonomous permissions without exposing the host or the open internet.
 
-**Core Value:** Claude can run fully autonomous (`--dangerously-skip-permissions`) inside a sandbox that has **zero direct network egress** — all model inference is brokered through the OpenShell gateway — so elevated permissions can't be used to reach or exfiltrate to the open internet.
+**Core Value:** Claude can run fully autonomous (`--dangerously-skip-permissions`) inside a sandbox that has a **single, binary-scoped, TLS-opaque egress hole to `api.anthropic.com:443`** for Claude Code's subscription OAuth traffic, and **nothing else reaches the open internet**. The sandbox allowlists only `api.anthropic.com:443` via TLS passthrough (no decryption, no credential injection), scoped to the `claude` binary — so elevated permissions cannot be used to exfiltrate to arbitrary hosts.
+
+**Accepted trade-off:** The subscription OAuth token lives inside the sandbox at `~/.claude/.credentials.json` (written by the in-sandbox `claude` OAuth login flow). Mitigations: egress is restricted to `api.anthropic.com:443` only; the policy is binary-scoped to `claude`; the sandbox is deleted between sessions with `./rebuild.sh down`.
 
 ### Constraints
 
 - **Platform**: Sandbox runtime must be NVIDIA OpenShell — built/managed via the `openshell` CLI on this host.
 - **Build tool**: Container image must be built with podman (`podman build`), not the Docker daemon. The image reference is then handed to `openshell sandbox create --from <image-ref>`.
 - **Base image**: Fedora 44 — base for the sandbox image.
-- **Network**: Running sandbox must have zero direct internet egress; inference via OpenShell gateway only.
+- **Network**: Running sandbox allows ONLY `api.anthropic.com:443` (TLS passthrough, binary-scoped to `claude`). No `statsig.anthropic.com`, no `sentry.io`, no open internet. Claude Code authenticates via in-sandbox subscription OAuth login (no `ANTHROPIC_API_KEY`, no `inference.local` gateway).
 - **Supply chain**: govulncheck, gsd-core (+ all deps), and Claude Code CLI pinned to "latest as of 4 days before build" (rolling). Cooldown window default 4 days.
 - **Install methods**: Go and golangci-lint via RPM; govulncheck via `go install`; gsd-core + Claude Code via their package managers (npm).
 - **Reproducibility**: rebuild must be script-driven and repeatable.
@@ -52,28 +54,16 @@ A reproducible, network-isolated development sandbox — built as an NVIDIA Open
 - OpenShell rejects mount targets that overlap with `/etc/openshell`, `/etc/openshell-tls`, workspace root, or supervisor paths.
 - Named volumes (`type: volume`) do NOT require `enable_bind_mounts = true` unless the named volume itself is bind-backed.
 
-### Gateway Inference Brokering (`inference.local`)
+### Network Policy — api.anthropic.com:443 Passthrough (Architecture B)
 
-- Strips any `Authorization` / API-key header the sandbox provides (the in-sandbox placeholder is never forwarded)
-- Injects the real backend credential from the configured provider record (the `claude-code` subscription login)
-- Rewrites the model to the gateway-configured model
-- Forwards to the upstream Anthropic (or other) endpoint
+- Sandbox allows ONLY `api.anthropic.com:443` (TLS passthrough, proxy never decrypts the stream)
+- Binary-scoped to `/usr/bin/claude` and `/usr/local/bin/claude` — arbitrary processes cannot use the egress hole
+- `statsig.anthropic.com` and `sentry.io` intentionally absent (reduced telemetry/exfil surface)
+- All other egress denied (no `curl google.com`, no git clone at runtime, etc.)
+- No `inference.local` gateway, no `ANTHROPIC_API_KEY`, no host-side `openshell provider create`
+- Claude Code authenticates via in-sandbox OAuth login: `./rebuild.sh login` → browser URL outside sandbox → paste code
 
-# Register local gateway (already done on this machine):
-
-# Configure inference provider using the existing Claude subscription login:
-
-# ^ loads the existing Claude Code subscription credential from host state
-
-#   (~/.claude/.credentials.json / macOS keychain) — NO api key involved.
-
-#   `openshell provider refresh` handles OAuth token refresh host-side.
-
-#   Exact --type/profile flag confirmed empirically in the inference phase.
-
-# Point inference.local at the provider:
-
-### Zero-Egress Policy
+### Zero-Egress Policy (historical note — superseded by Architecture B)
 
 ## 2. Fedora 44 Base Image
 
@@ -229,10 +219,11 @@ A reproducible, network-isolated development sandbox — built as an NVIDIA Open
 | npm install without `--allow-scripts @anthropic-ai/claude-code` for claude-code | claude-code requires its first-party `postinstall: node install.cjs`; omitting the flag may fail silently if npm defaults change | `--allow-scripts @anthropic-ai/claude-code` (permits only first-party script) |
 | npm install without `--allow-git=none --allow-remote=none --allow-directory=none` | These flags default to `all` (permissive); omitting them leaves git-ref, tarball-URL, and local-directory dependency sources allowed — only registry semver ranges are acceptable in a supply-chain-hardened sandbox | Pass `--allow-git=none --allow-remote=none --allow-directory=none` on every npm install |
 | `claude --allow-dangerously-skip-permissions` | Prompts the user on each risky action; designed for interactive opt-in not autonomous operation | `claude --dangerously-skip-permissions` |
-| `ANTHROPIC_BASE_URL=https://inference.local/v1` | Claude Code appends `/v1/messages`; adding `/v1` in the base URL creates `/v1/v1/messages` (double path) | `ANTHROPIC_BASE_URL=https://inference.local` (no trailing `/v1`) |
-| `--from-existing` provider flag in Dockerfile | Reads from host keychain/environment, not available inside container build | Set credentials via `openshell provider create` on the host before sandbox creation |
+| `ENV ANTHROPIC_BASE_URL=https://inference.local` in Dockerfile | Architecture B does not use inference.local; setting this ENV would point Claude Code at a non-existent gateway | Omit the ENV — Claude Code uses its built-in default (api.anthropic.com) |
+| `protocol: rest` on the api.anthropic.com policy entry | Would terminate TLS and expose the subscription OAuth token to the proxy | Omit `protocol` entirely (TCP passthrough — proxy never decrypts the stream) |
+| `openshell provider create --from-existing` | Architecture B has no host-side provider step; credentials live inside the sandbox | `./rebuild.sh login` (in-sandbox OAuth flow: URL in browser outside → paste code) |
 | `golangci-lint` via `go install` (from upstream) | Bypasses dnf cooldown mechanism; version not controlled by RPM package manager | `dnf install golangci-lint` in Fedora 44 (provides 2.11.3) |
-| `openshell policy update --add-endpoint api.anthropic.com:443` | Defeats zero-egress guarantee; opens direct path to Anthropic bypassing inference.local privacy routing | Use `inference.local` via gateway; no direct egress allowlist needed |
+| Adding `statsig.anthropic.com` or `sentry.io` to network_policies | Expands egress beyond the minimal api.anthropic.com-only surface; adds telemetry/error-reporting exfil paths | Keep both absent; if Claude Code is degraded, add only `statsig.anthropic.com:443` as a follow-up |
 
 ## Version Compatibility
 

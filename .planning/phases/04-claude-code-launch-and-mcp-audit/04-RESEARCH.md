@@ -594,12 +594,15 @@ run_plugin_audit() {
     if [[ "${expected}" == "MUST_SUCCEED" && ${rc} -eq 0 ]]; then
         echo "PASS [OK] ${plugin_name} (${wall_secs}s)"
     elif [[ "${expected}" == "MUST_FAIL_CLEAN" && ${rc} -eq 0 ]]; then
-        # Verify output contains a network/MCP error, not a real success
-        if echo "${output}" | grep -qiE "403|connection refused|not available|tool.*not.*found|cannot connect"; then
+        # Verify output contains a network/MCP error, not a real success.
+        # D-10: a MUST_FAIL_CLEAN plugin that exits 0 WITHOUT a clean network/MCP
+        # error is an expected/actual mismatch → it MUST hard-fail (return 1), not WARN.
+        if echo "${output}" | grep -qiE "403|connection refused|not available|tool.*not.*found|cannot connect|network unreachable"; then
             echo "PASS [FAIL_CLEAN] ${plugin_name} (${wall_secs}s)"
         else
-            echo "WARN [CHECK] ${plugin_name}: expected failure but got unexpected output (${wall_secs}s)"
+            echo "FAIL [MISMATCH] ${plugin_name}: expected clean failure but exited 0 with no network/MCP error (${wall_secs}s)"
             echo "  Output: ${output:0:200}"
+            return 1
         fi
     else
         echo "FAIL [UNEXPECTED] ${plugin_name}: rc=${rc} expected=${expected} (${wall_secs}s)"
@@ -777,27 +780,33 @@ The following directives from `CLAUDE.md` apply to Phase 4 work:
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+All four questions have been resolved; none changes a locked verdict or the harness design. The common thread: the 120s `openshell sandbox exec --timeout` outer bound makes every uncertain case fail safely — any unbounded stall surfaces as exit 124 = HANG = hard-FAIL (the correct, intended verdict per D-07/D-10).
 
 1. **`agent-readiness` WebSearch behavior in headless `-p` mode**
    - What we know: WebSearch is a Claude built-in; no direct outbound connections observed in logs during tests.
    - What's unclear: Whether `agent-readiness` can be invoked meaningfully without a git repo context and without the full codebase analysis infrastructure.
    - Recommendation: Invoke with a minimal prompt ("Run /agent-readiness to check this directory") in a directory with a small file; treat any exit-0 response as PASS regardless of content.
+   - **RESOLVED:** Documented-expected per the recommendation above. WebSearch routes server-side through api.anthropic.com (ALLOWED), so `agent-readiness` stays MUST_SUCCEED — no locked verdict changes. No planning-impact.
 
 2. **`full-review` skill in headless mode — 11 sub-agents spawned**
    - What we know: `full-review` runs git diff and spawns 11 reviewer agents simultaneously.
    - What's unclear: Whether spawning 11 sub-agents via `claude -p` completes within the 120s timeout on a directory with no Go files (most reviewers would skip immediately).
    - Recommendation: Invoke in `/claudeshared` which likely has no Go files; all reviewers exit early ("no Go files found"); expect fast completion.
+   - **RESOLVED:** The harness handles this correctly either way. In a directory with no Go files the 11 sub-agents exit immediately, so `full-review` completes fast and stays MUST_SUCCEED. If full-review nonetheless exceeds the 120s exec timeout, it surfaces as exit 124 = HANG = hard-FAIL — the correct, intended verdict, because an unbounded stall must fail. No special-casing needed; no locked verdict changes.
 
 3. **`downloads.claude.ai` denial — suppressed or not?**
    - What we know: One denial observed in session history (early session, older claude invocation ~11:32 AM). Recent sessions (last hour) show no `downloads.claude.ai` denials from `claude.exe`.
    - What's unclear: Whether the `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` ENV consistently suppresses the auto-update check, or whether it only fires on first run.
    - Recommendation: The audit run should check for `downloads.claude.ai` denials and document them as informational (not a hard failure), since the policy blocks them regardless.
+   - **RESOLVED:** Documented-expected per the recommendation above. `downloads.claude.ai` denials are recorded as informational telemetry-info in the audit (policy blocks them regardless); they do not affect a locked verdict and do not change the harness design.
 
 4. **`jira-ticket` and `implement` skills — `AskUserQuestion` behavior in `-p` mode**
    - What we know: These skills use `AskUserQuestion` which expects interactive user input.
    - What's unclear: Whether `AskUserQuestion` blocks indefinitely or times out in `-p` mode.
    - Recommendation: Given the proxy returns 403 fast, and Jira MCP tools would fail before `AskUserQuestion` is even called (no MCP server configured), the failure will likely be a "tool not found" error, not a hang. Verify with the 120s timeout.
+   - **RESOLVED:** The harness handles this correctly either way. The proxy's ~38ms 403 makes a clean MUST_FAIL_CLEAN the expected path (Jira MCP fails before `AskUserQuestion` is reached). If `AskUserQuestion` instead blocks rather than fast-failing, the 120s `--timeout` catches it as exit 124 = HANG = hard-FAIL — the correct verdict (a true block fails safely). Either path is acceptable; no locked verdict changes.
 
 ---
 

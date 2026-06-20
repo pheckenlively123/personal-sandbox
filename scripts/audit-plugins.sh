@@ -56,7 +56,11 @@ log_error() { echo "ERROR: $1" >&2; }
 # ---------------------------------------------------------------------------
 # Static plugin enumeration (D-08)
 # Verified against live toolkit: 11 agents + 6 skills
-# vuln-reviewer: MUST_FAIL_CLEAN — govulncheck requires vuln.go.dev, outside 3-host allowlist (Option C)
+# Invoked with --dangerously-skip-permissions to match the autonomous `claude` verb
+# (04-02) — without it, tool-executing reviewers/skills stall on permission prompts.
+# All 11 agents MUST_SUCCEED: the 6 read-only reviewers analyze locally; lint/test/vuln
+# run their Go tools against the go_egress allowlist (proxy.golang.org / sum.golang.org /
+# vuln.go.dev) added in policy.yaml (Phase 4 / 04-03 audit enablement).
 # jira-ticket, implement, my-work: MUST_FAIL_CLEAN — Jira/GitHub/Google APIs outside allowlist
 # ---------------------------------------------------------------------------
 declare -A AGENTS=(
@@ -70,7 +74,7 @@ declare -A AGENTS=(
     [performance-reviewer]="MUST_SUCCEED"
     [security-reviewer]="MUST_SUCCEED"
     [test-reviewer]="MUST_SUCCEED"
-    [vuln-reviewer]="MUST_FAIL_CLEAN"
+    [vuln-reviewer]="MUST_SUCCEED"
 )
 
 declare -A SKILLS=(
@@ -111,6 +115,7 @@ run_plugin_audit() {
         --workdir "${SHARED_DIR}" \
         -- claude \
             --plugin-dir /opt/claude-engineering-toolkit \
+            --dangerously-skip-permissions \
             -p "${prompt}" 2>&1) || rc=$?
 
     local end_wall wall_secs

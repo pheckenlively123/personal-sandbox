@@ -17,8 +17,11 @@
 #   - Subscription OAuth login: `./rebuild.sh login` → open URL in browser OUTSIDE the
 #     sandbox → paste the returned code into the in-sandbox prompt. One-time per session.
 #   - No inference.local gateway. No ANTHROPIC_API_KEY. No host-side provider setup.
-#   - The sandbox policy allows ONLY the three Claude auth/API hosts (TLS passthrough,
-#     binary-scoped to /usr/bin/claude and /usr/local/bin/claude). All other egress denied.
+#   - The sandbox policy allows the three Claude auth/API hosts (TLS passthrough,
+#     binary-scoped to /usr/bin/claude and /usr/local/bin/claude) AND, via a separate
+#     go_egress policy, three Go-toolchain hosts (proxy.golang.org, sum.golang.org,
+#     vuln.go.dev) binary-scoped to /usr/bin/go, /usr/bin/golangci-lint, and
+#     /usr/local/bin/govulncheck. All other egress denied.
 #   - CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 keeps statsig/sentry/downloads unused.
 #   - On-the-fly model selection via Claude's native /model command (Opus/Sonnet/Haiku).
 #
@@ -100,12 +103,13 @@ ensure_podman_ready() {
 }
 
 # ---------------------------------------------------------------------------
-# NET-04 live policy assertion — claude-egress allowlist, passthrough, claude-scoped (Finding 5)
+# NET-04 live policy assertion — claude_egress + go_egress allowlists, passthrough, scoped
 # ---------------------------------------------------------------------------
 # Asserts the live effective sandbox policy:
-#   PASS requires: api.anthropic.com:443, platform.claude.com:443, and claude.ai:443 all
-#                  present with no `protocol` field (passthrough), at least one binary entry
-#                  matching */claude, statsig.anthropic.com ABSENT, sentry.io ABSENT.
+#   PASS requires: api.anthropic.com:443, platform.claude.com:443, claude.ai:443 (claude-scoped)
+#                  AND proxy.golang.org:443, sum.golang.org:443, vuln.go.dev:443 (go-scoped),
+#                  all with no `protocol` field (passthrough); statsig.anthropic.com ABSENT,
+#                  sentry.io ABSENT.
 #   FAIL on any violation — fatal (exit 1).
 assert_claude_egress_allowlist() {
     local sandbox_name="${1}"
@@ -167,7 +171,38 @@ assert_claude_egress_allowlist() {
     fi
     log_info "NET-04: sentry.io absent (error-reporting blocked)"
 
-    log_info "NET-04 PASS: api.anthropic.com, platform.claude.com, claude.ai — all :443 passthrough, claude-scoped; statsig+sentry absent"
+    # --- Require the Go-toolchain egress hosts present, passthrough, go-scoped (Phase 4) ---
+    local -a required_go_hosts=("proxy.golang.org" "sum.golang.org" "vuln.go.dev")
+    for go_host in "${required_go_hosts[@]}"; do
+        if ! echo "${policy_json}" | jq -e \
+            --arg h "${go_host}" \
+            '.policy.network_policies // {} | to_entries[] | .value.endpoints[]? | select(.host == $h and .port == 443)' \
+            >/dev/null 2>&1; then
+            log_error "NET-04 VIOLATION: ${go_host}:443 NOT found in effective policy — go_egress allow missing!"
+            log_error "Policy output: ${policy_json}"
+            exit 1
+        fi
+        if echo "${policy_json}" | jq -e \
+            --arg h "${go_host}" \
+            '.policy.network_policies // {} | to_entries[] | .value.endpoints[]? | select(.host == $h) | select(.protocol != null)' \
+            >/dev/null 2>&1; then
+            log_error "NET-04 VIOLATION: ${go_host} endpoint has a 'protocol' field — must be omitted for TLS passthrough!"
+            exit 1
+        fi
+        log_info "NET-04: ${go_host}:443 present, no 'protocol' field (opaque passthrough confirmed)"
+    done
+
+    # --- Require the go_egress policy scoped to the Go toolchain (NOT the claude binary) ---
+    if ! echo "${policy_json}" | jq -e \
+        '.policy.network_policies // {} | to_entries[] | .value | select(.endpoints[]? | .host == "proxy.golang.org") | .binaries[]? | select(.path | test("/(go|golangci-lint|govulncheck)$"))' \
+        >/dev/null 2>&1; then
+        log_error "NET-04 VIOLATION: go_egress policy has no binary entry scoped to the Go toolchain!"
+        log_error "Policy output: ${policy_json}"
+        exit 1
+    fi
+    log_info "NET-04: Go hosts binary-scoped to the Go toolchain confirmed"
+
+    log_info "NET-04 PASS: claude_egress (api.anthropic.com, platform.claude.com, claude.ai — claude-scoped) + go_egress (proxy.golang.org, sum.golang.org, vuln.go.dev — go-scoped); all :443 passthrough; statsig+sentry absent"
 }
 
 # ---------------------------------------------------------------------------

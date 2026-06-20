@@ -6,7 +6,7 @@ A reproducible, network-isolated development sandbox — built as an NVIDIA Open
 
 ## Core Value
 
-Claude can run fully autonomous (`--dangerously-skip-permissions`) inside a sandbox that has **zero direct network egress** — all model inference is brokered through the OpenShell gateway — so elevated permissions can't be used to reach or exfiltrate to the open internet.
+Claude can run fully autonomous (`--dangerously-skip-permissions`) inside a sandbox with a **three-host, binary-scoped, TLS-passthrough egress allowlist** — `api.anthropic.com:443` (inference), `platform.claude.com:443` (Console auth), and `claude.ai:443` (auth) — and nothing else reaches the open internet (Architecture B). Claude authenticates via in-sandbox subscription OAuth (`./rebuild.sh login`); there is no gateway, no `ANTHROPIC_API_KEY`, no host-side provider setup.
 
 ## Requirements
 
@@ -32,22 +32,22 @@ Claude can run fully autonomous (`--dangerously-skip-permissions`) inside a sand
 - [ ] claude-engineering-toolkit fork cloned (`https://github.com/pheckenlWork/claude-engineering-toolkit.git`, default branch, latest HEAD)
 - [ ] Claude launched with `--plugin-dir` pointed at the cloned toolkit so its agents and skills are available
 - [ ] Claude launched with `--dangerously-skip-permissions`
-- [ ] Sandbox runtime has zero direct internet egress; model inference is brokered via the OpenShell gateway *(Phase 3)*
+- [x] Sandbox runtime enforces a 3-host TLS-passthrough egress allowlist (api.anthropic.com / platform.claude.com / claude.ai, binary-scoped to claude); all other egress denied (Architecture B) *(Phase 3)*
 
 ### Out of Scope
 
 <!-- Explicit boundaries. Includes reasoning to prevent re-adding. -->
 
 - Cooldown pinning for the claude-engineering-toolkit — operator maintains the fork, so latest HEAD is trusted
-- Direct internet egress from the running sandbox (including a direct allowlist to api.anthropic.com) — inference goes through the gateway instead; preserves zero-egress guarantee
+- Unconstrained open internet egress from the running sandbox beyond the three Claude auth/API hosts — the Architecture B 3-host allowlist is the egress boundary; no additional hosts permitted
 - GPU allocation — not required for this workload unless surfaced later
 - Multi-user / shared-host hardening beyond the single operator — single-developer tool
 
 ## Context
 
 - **Host:** macOS (darwin), with `openshell` + `openshell-gateway` (`/opt/homebrew/bin`), `podman`, `docker` (Rancher Desktop), `nerdctl`, Node v26 / npm 11 already installed.
-- **OpenShell model:** `sandbox create --from <Dockerfile|dir|image>` accepts a Dockerfile/dir (built via the local Docker daemon) **or a full image reference**. This project builds the image with `podman build` and passes the resulting image reference to `--from`, avoiding the Docker daemon. OpenShell sandboxes are themselves Podman-backed at runtime; the build-phase plan must confirm the podman-built image is visible to OpenShell (separate docker/podman image stores). Network egress is governed by a sandbox **policy** (endpoint allowlist, e.g. `policy update --add-endpoint host:port:...`); a deny/empty policy yields zero egress. The gateway provides `inference` brokering, which is how Claude reaches a model without direct egress.
-- **Build vs runtime networking:** the podman build phase has network (needed for `dnf update`, `go install`, npm install, git clone); the zero-egress requirement applies to the *running* sandbox via policy.
+- **OpenShell model:** `sandbox create --from <Dockerfile|dir|image>` accepts a Dockerfile/dir (built via the local Docker daemon) **or a full image reference**. This project builds the image with `podman build` and passes the resulting image reference to `--from`, avoiding the Docker daemon. OpenShell sandboxes are themselves Podman-backed at runtime; the build-phase plan must confirm the podman-built image is visible to OpenShell (separate docker/podman image stores). Network egress is governed by a sandbox **policy** (endpoint allowlist); the Architecture B 3-host allowlist (api.anthropic.com / platform.claude.com / claude.ai) is set via `policy.yaml` at create time; all other egress is denied.
+- **Build vs runtime networking:** the podman build phase has network (needed for `dnf update`, `go install`, npm install, git clone); the 3-host allowlist requirement applies to the *running* sandbox via policy (Architecture B).
 - **`~/claudeshared`** already exists on the host and is the shared workspace for cloned repos.
 - **Supply-chain intent:** pin third-party packages to versions that existed before a cooldown window (default 4 days) to avoid pulling freshly published (potentially malicious) releases.
 
@@ -56,7 +56,7 @@ Claude can run fully autonomous (`--dangerously-skip-permissions`) inside a sand
 - **Platform**: Sandbox runtime must be NVIDIA OpenShell — built/managed via the `openshell` CLI on this host.
 - **Build tool**: Container image must be built with podman (`podman build`), not the Docker daemon. The image reference is then handed to `openshell sandbox create --from <image-ref>`.
 - **Base image**: Fedora 44 — base for the sandbox image.
-- **Network**: Running sandbox must have zero direct internet egress; inference via OpenShell gateway only.
+- **Network**: Running sandbox allows ONLY `api.anthropic.com:443`, `platform.claude.com:443`, and `claude.ai:443` (all TLS passthrough, binary-scoped to claude); all other egress denied (Architecture B). No gateway, no `ANTHROPIC_BASE_URL` override.
 - **Supply chain**: govulncheck, gsd-core (+ all deps), and Claude Code CLI pinned to "latest as of 4 days before build" (rolling). Cooldown window default 4 days.
 - **Install methods**: Go and golangci-lint via RPM; govulncheck via `go install`; gsd-core + Claude Code via their package managers (npm).
 - **Reproducibility**: rebuild must be script-driven and repeatable.
@@ -69,8 +69,8 @@ Claude can run fully autonomous (`--dangerously-skip-permissions`) inside a sand
 |----------|-----------|---------|
 | Run as an OpenShell sandbox built from a Fedora 44 Dockerfile | "nvidia openshell" resolves to the installed OpenShell CLI, which builds from a Dockerfile/dir and runs as a sandbox | — Pending |
 | Build the image with podman, hand the image reference to `openshell sandbox create --from <image-ref>` | Operator prefers podman over the Docker daemon for image builds; OpenShell `--from` accepts a full image reference | ✓ Confirmed (Phase 2): OpenShell creates the sandbox from the podman-built `localhost/claude-sandbox:<date>` ref (image_pull_policy `missing` uses the local store). NOTE: OpenShell sandbox images MUST contain a `sandbox` user+group and `iproute`, and `--policy` OVERRIDES the built-in default (a custom policy must reproduce the full default + added paths) |
-| Inference brokered through the OpenShell gateway rather than allowlisting api.anthropic.com | Preserves true zero-egress for the sandbox while still letting Claude reach a model | — Pending |
-| Authenticate via the Claude subscription login (gateway `claude-code` provider, `--from-existing`) instead of an `ANTHROPIC_API_KEY` | Host is already logged in via subscription (no API key present); gateway holds/refreshes the credential host-side, so the zero-egress sandbox needs only a placeholder | — Pending (inference phase to confirm exact provider create/inference set flags) |
+| Claude Code connects directly to api.anthropic.com via a 3-host TLS-passthrough allowlist (Architecture B), not through an OpenShell gateway | Phase 3 quick-task pivot: the original gateway/zero-egress model was replaced; Architecture B gives the same containment with simpler auth (in-sandbox OAuth) and no host-side provider setup | ✓ Confirmed (Phase 3): egress allowlist in policy.yaml; NET-04/NET-05 assertions pass; claude reaches api.anthropic.com directly |
+| Authenticate via in-sandbox subscription OAuth (`./rebuild.sh login` → browser URL outside → paste code) instead of an `ANTHROPIC_API_KEY` or host-side provider injection | Architecture B — no gateway to inject credentials; subscription OAuth token lives at `~/.claude/.credentials.json` inside the sandbox; egress is restricted to the three Claude auth/API hosts only (mitigates token exfiltration) | ✓ Confirmed (Phase 3): in-sandbox login flow works; token stored in-sandbox only |
 | Rolling cooldown (build date − 4 days), window configurable | Keeps a constant supply-chain cooldown gap across periodic rebuilds | — Pending |
 | Cooldown applies to govulncheck, gsd-core (+deps), and Claude Code CLI | Consistent supply-chain mitigation for network-installed components | — Pending |
 | claude-engineering-toolkit cloned at latest HEAD (no cooldown) | Operator maintains the fork, so it's trusted | — Pending |

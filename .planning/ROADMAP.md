@@ -70,16 +70,19 @@
 
 ### Phase 3: Network Isolation and Inference Validation
 
-**Goal**: The running sandbox has zero direct internet egress enforced by the OpenShell policy, and Claude Code can successfully complete a model round-trip through the gateway inference broker — no direct connection to `api.anthropic.com` from inside the sandbox.
+**Goal**: The running sandbox has a 3-host TLS-passthrough egress allowlist (api.anthropic.com / platform.claude.com / claude.ai, binary-scoped to claude) enforced by the OpenShell policy — Architecture B — and Claude Code successfully completes a model round-trip directly to api.anthropic.com via subscription OAuth.
 **Mode:** mvp
 **Depends on**: Phase 2
 **Requirements**: NET-01, NET-02, NET-03, NET-04, NET-05
+
+> **Architecture B note (D-13):** Phase 3 shipped as Architecture B (commits 4f99856 / a6c8e83), not the original gateway/zero-egress model. Criteria below have been reconciled to reflect what was actually built and validated.
+
 **Success Criteria** (what must be TRUE):
 
-  1. `curl https://api.anthropic.com` from inside the running sandbox fails with a proxy error or connection refused (not a successful response)
-  2. Claude Code inside the sandbox completes a live multi-turn interactive session — at least two model round-trips succeed via `inference.local` — confirming the gateway broker is working
-  3. `rebuild.sh` runs `openshell inference get` as a preflight check before `sandbox create` and exits with a clear error message if the provider is not registered (preventing the 290-second hang)
-  4. The rebuild script asserts the egress policy contains no `api.anthropic.com` or other direct Anthropic endpoint — confirming the zero-egress guarantee has not been violated
+  1. `curl https://api.anthropic.com` from inside the running sandbox is blocked by binary-scoping (curl is not the claude binary); the claude binary itself reaches api.anthropic.com directly (validated via `./rebuild.sh login`)
+  2. Claude Code inside the sandbox completes a live model round-trip by connecting directly to api.anthropic.com via subscription OAuth (in-sandbox `./rebuild.sh login` → browser URL outside → paste code); no gateway proxy
+  3. The rebuild script asserts NET-04: the egress policy contains all three claude auth/API hosts (api.anthropic.com, platform.claude.com, claude.ai) as TLS-passthrough, binary-scoped to claude; statsig.anthropic.com and sentry.io are absent
+  4. The rebuild script runs NET-05: an egress smoke test confirming non-allowlisted hosts (statsig/sentry/google) are blocked from inside the sandbox; claude-host reachability is validated by `./rebuild.sh login`
 
 **Plans:** 2/2 plans complete
 
@@ -100,7 +103,7 @@
 **Success Criteria** (what must be TRUE):
 
   1. `claude --dangerously-skip-permissions --plugin-dir /opt/claude-engineering-toolkit` launches inside the sandbox without errors and reports the toolkit agents/skills as loaded
-  2. Each claude-engineering-toolkit plugin is invoked once inside the zero-egress sandbox and either succeeds or fails with a clear, deterministic error — no plugin hangs for more than 10 seconds waiting on a network call
+  2. Each claude-engineering-toolkit plugin is invoked once inside the 3-host-allowlist sandbox and either succeeds or fails with a clear, deterministic error — no plugin hangs for more than 10 seconds waiting on a network call
   3. Claude Code startup produces no telemetry or auto-update connection errors in the sandbox logs (confirming `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` is effective)
 
 > **Architecture B note (reconciled in 04-02 / D-13):** criteria above predate the Phase 3 pivot. Criterion #2's "zero-egress sandbox" means the **3-host-allowlist sandbox** (api.anthropic.com / platform.claude.com / claude.ai); criterion #3 means the policy denies all non-allowlisted hosts while Claude operates correctly. The 10s bound = "no plugin produces an exit-124 timeout" (legitimate model latency may exceed 10s).

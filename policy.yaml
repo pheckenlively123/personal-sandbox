@@ -30,6 +30,10 @@ filesystem_policy:
     - /app
     - /etc
     - /var/log
+    # Blocker 1 fix (RUN-02/D-08): toolkit cloned to /opt/claude-engineering-toolkit (IMG-05);
+    # Landlock must grant read for sandbox user to enumerate agents/ and skills/.
+    # read_only only — write intentionally omitted (T-04-02 mitigation).
+    - /opt
   read_write:
     - /sandbox
     - /tmp

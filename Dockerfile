@@ -45,7 +45,8 @@ ENV PATH="${PATH}:/root/go/bin"
 # feedback). This ensures statsig.anthropic.com, sentry.io, and downloads.claude.ai are never
 # contacted — keeping the zero-egress policy clean without needing those hosts in the allowlist.
 ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-RUN go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
+RUN go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION} && \
+    cp /root/go/bin/govulncheck /usr/local/bin/govulncheck
 
 # Step 4: gsd-core via npm — explicit version pin + --before date (PIN-04, D-02).
 # --before="${COOLDOWN_DATE}T23:59:59Z" pins the full transitive tree to versions published
@@ -108,9 +109,9 @@ RUN dnf install -y iproute && dnf clean all
 RUN groupadd -g 1000 sandbox \
     && useradd -m -u 1000 -g sandbox -s /bin/bash --no-log-init sandbox
 
-# Runtime entry point: Claude Code with dangerously-skip-permissions and plugin dir.
-# Architecture B: ANTHROPIC_BASE_URL is NOT set — Claude Code uses its built-in default
-# (api.anthropic.com) and authenticates via in-sandbox subscription OAuth login.
-# The operator runs `./rebuild.sh login` to complete the OAuth flow after sandbox creation.
-# Do NOT add --bare: that flag skips OAuth and requires ANTHROPIC_API_KEY, which we do not use.
-CMD ["claude", "--dangerously-skip-permissions", "--plugin-dir", "/opt/claude-engineering-toolkit"]
+# Runtime default for direct `podman run` only (D-03 resolution).
+# OpenShell sandbox create always overrides CMD via `-- COMMAND`; the supervisor (PID 1)
+# never executes the image CMD. The canonical launch path is `./rebuild.sh claude`
+# (openshell sandbox exec --tty --workdir /claudeshared -- claude --dangerously-skip-permissions
+# --plugin-dir /opt/claude-engineering-toolkit). Architecture B: ANTHROPIC_BASE_URL is NOT set.
+CMD ["/bin/bash"]

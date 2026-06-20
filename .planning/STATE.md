@@ -26,11 +26,20 @@ progress:
 
 ## Current Position
 
-Phase: 04 (claude-code-launch-and-mcp-audit) — EXECUTING
-Plan: 3 of 3
-**Phase**: 2 — Rebuild Script and Sandbox Lifecycle
-**Plan**: 02-02 — Ready to execute
-**Status**: 02-01 complete (BLD-03 satisfied); ready to start 02-02 (rebuild.sh end-to-end slice)
+Phase: 04 (claude-code-launch-and-mcp-audit) — PARTIAL / audit DEFERRED
+Plan: 3 of 3 (04-03 partial)
+**Status**: 04-01 ✓ (blocker fixes), 04-02 ✓ (`claude` verb + Architecture B docs), 04-03 PARTIAL —
+harness + `audit-plugins` verb + `go_egress` allowlist shipped and committed; criterion #1 (launch)
+and criterion #3 (telemetry suppression) verified. **Criterion #2 (full plugin-audit green) DEFERRED**
+by operator decision: the toolkit skills need a real-codebase/PR context to be meaningfully audited, and
+the harness needs robustness fixes (raise 120s timeout; rate-limit retry/backoff + pacing; capture
+failing-invocation output). Revisit after real sandbox usage — see
+`.planning/phases/04-claude-code-launch-and-mcp-audit/.continue-here.md`.
+
+**Key decision (2026-06-20):** added a second binary-scoped egress allowlist `go_egress`
+(proxy.golang.org / sum.golang.org / vuln.go.dev → Go toolchain) so the Go-tool reviewers resolve
+modules + vuln DB; the project's egress posture is now two allowlists (claude + go), not Claude-only.
+CLAUDE.md Core Value + Network Policy reconciled.
 
 **Overall Progress**:
 

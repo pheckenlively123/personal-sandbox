@@ -12,7 +12,7 @@
 - [x] **Phase 1: Dockerfile and Supply-Chain Pinning** - Working image that installs all tooling with rolling cooldown pinning (verification gaps found — PIN-07 gap closure pending) (completed 2026-06-14)
 - [x] **Phase 2: Rebuild Script and Sandbox Lifecycle** - Idempotent rebuild.sh that builds the image and recreates the sandbox cleanly (completed 2026-06-15)
 - [x] **Phase 3: Network Isolation and Inference Validation** - Running sandbox with zero direct egress and working model inference via the gateway (completed 2026-06-16)
-- [ ] **Phase 4: Claude Code Launch and MCP Audit** - Claude running autonomously inside the sandbox with toolkit plugins loaded and audited
+- [~] **Phase 4: Claude Code Launch and MCP Audit** - Claude running autonomously inside the sandbox with toolkit plugins loaded; launch (criterion #1) + telemetry suppression (criterion #3) verified, `go_egress` allowlist shipped. Full plugin audit (criterion #2) DEFERRED pending real-codebase usage + harness-robustness fixes.
 
 ---
 
@@ -120,7 +120,7 @@
 
 **Wave 3** *(blocked on Wave 1+2 — shares rebuild.sh with 04-02)*
 
-- [ ] 04-03-PLAN.md — `audit-plugins` verb + scripts/audit-plugins.sh headless harness (hard-fail, D-04..D-12) + committed PLUGIN-AUDIT.md (criterion #2 + #3)
+- [~] 04-03-PLAN.md — `audit-plugins` verb + scripts/audit-plugins.sh harness + `go_egress` allowlist shipped; criterion #3 (telemetry) verified. **Criterion #2 (full plugin-audit green) DEFERRED** by operator decision — toolkit skills need a real-codebase context + harness-robustness fixes (timeout, rate-limit). See `.continue-here.md` + `PLUGIN-AUDIT.md`.
 
 ---
 

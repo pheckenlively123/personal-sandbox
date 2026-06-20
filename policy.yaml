@@ -12,10 +12,13 @@
 # OpenShell supervisor needs to set up its network namespace, causing the sandbox
 # to fail provisioning with "Permission denied (os error 13)".
 #
-# Architecture B (hardened): three-host Claude egress allowlist, binary-scoped to the
-# claude executable. No protocol field = opaque TCP/TLS passthrough (proxy never
-# decrypts the OAuth stream). statsig.anthropic.com and sentry.io are intentionally
-# absent — CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 (set in Dockerfile) disables
+# Architecture B (hardened): two independently binary-scoped egress allowlists —
+#   claude_egress: three Claude auth/API hosts, scoped to the claude executable
+#   go_egress:     three Go-toolchain hosts, scoped to the Go binaries (Phase 4)
+# No protocol field = opaque TCP/TLS passthrough (proxy never decrypts the stream;
+# the OAuth token transits claude_egress only and the Go binaries cannot reach it).
+# statsig.anthropic.com and sentry.io are intentionally absent —
+# CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 (set in Dockerfile) disables
 # auto-updater, telemetry, Sentry error-reporting, and feedback so these hosts are
 # never contacted. All other egress remains denied.
 version: 1
@@ -30,6 +33,10 @@ filesystem_policy:
     - /app
     - /etc
     - /var/log
+    # Blocker 1 fix (RUN-02/D-08): toolkit cloned to /opt/claude-engineering-toolkit (IMG-05);
+    # Landlock must grant read for sandbox user to enumerate agents/ and skills/.
+    # read_only only — write intentionally omitted (T-04-02 mitigation).
+    - /opt
   read_write:
     - /sandbox
     - /tmp
@@ -87,3 +94,34 @@ network_policies:
     binaries:
       - { path: /usr/bin/claude }
       - { path: /usr/local/bin/claude }
+  # ---------------------------------------------------------------------------
+  # go_egress — Go-toolchain egress allow (Phase 4 / 04-03 audit enablement).
+  # ---------------------------------------------------------------------------
+  # Separate, independently binary-scoped policy so the Go toolchain can resolve
+  # modules and the vulnerability DB WITHOUT widening the claude_egress scope:
+  # the claude binary cannot reach these Go hosts, and the Go binaries cannot
+  # reach the Claude auth/API hosts (the subscription OAuth token stays isolated).
+  # Enables lint-reviewer (golangci-lint), test-reviewer (go test), and
+  # vuln-reviewer (govulncheck) to run their tools in the network-isolated sandbox
+  # against non-vendored Go projects under /claudeshared.
+  #   - proxy.golang.org:443 — Go module proxy (go / golangci-lint / go test)
+  #   - sum.golang.org:443   — Go checksum database (go verifies go.sum by default)
+  #   - vuln.go.dev:443      — govulncheck vulnerability database
+  # All opaque TLS passthrough (no protocol field): these are public endpoints,
+  # no secrets transit them; the proxy never decrypts the stream.
+  go_egress:
+    name: go-egress
+    endpoints:
+      - host: proxy.golang.org
+        port: 443
+        # NO protocol field -> opaque TLS passthrough (Go module proxy).
+      - host: sum.golang.org
+        port: 443
+        # NO protocol field -> opaque TLS passthrough (Go checksum database).
+      - host: vuln.go.dev
+        port: 443
+        # NO protocol field -> opaque TLS passthrough (govulncheck vulnerability DB).
+    binaries:
+      - { path: /usr/bin/go }
+      - { path: /usr/bin/golangci-lint }
+      - { path: /usr/local/bin/govulncheck }

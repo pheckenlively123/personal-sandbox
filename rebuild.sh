@@ -6,8 +6,10 @@
 #   ./rebuild.sh status                           # Status summary (read-only)
 #   ./rebuild.sh connect                          # Attach to running sandbox shell
 #   ./rebuild.sh login                            # Connect + launch Claude OAuth login flow
+#   ./rebuild.sh claude                           # Launch autonomous Claude session (--dangerously-skip-permissions + --plugin-dir)
 #   ./rebuild.sh down                             # Delete sandbox (idempotent)
 #   ./rebuild.sh audit [--since <ts>]             # Surface openshell logs
+#   ./rebuild.sh audit-plugins                    # Strict headless plugin audit (hard-fails on mismatch)
 #
 # Architecture B — hardened to claude-egress-allowlist direct egress:
 #   - Claude Code runs INSIDE the sandbox and connects DIRECTLY to the three Claude hosts:
@@ -15,8 +17,11 @@
 #   - Subscription OAuth login: `./rebuild.sh login` → open URL in browser OUTSIDE the
 #     sandbox → paste the returned code into the in-sandbox prompt. One-time per session.
 #   - No inference.local gateway. No ANTHROPIC_API_KEY. No host-side provider setup.
-#   - The sandbox policy allows ONLY the three Claude auth/API hosts (TLS passthrough,
-#     binary-scoped to /usr/bin/claude and /usr/local/bin/claude). All other egress denied.
+#   - The sandbox policy allows the three Claude auth/API hosts (TLS passthrough,
+#     binary-scoped to /usr/bin/claude and /usr/local/bin/claude) AND, via a separate
+#     go_egress policy, three Go-toolchain hosts (proxy.golang.org, sum.golang.org,
+#     vuln.go.dev) binary-scoped to /usr/bin/go, /usr/bin/golangci-lint, and
+#     /usr/local/bin/govulncheck. All other egress denied.
 #   - CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 keeps statsig/sentry/downloads unused.
 #   - On-the-fly model selection via Claude's native /model command (Opus/Sonnet/Haiku).
 #
@@ -98,17 +103,29 @@ ensure_podman_ready() {
 }
 
 # ---------------------------------------------------------------------------
-# NET-04 live policy assertion — claude-egress allowlist, passthrough, claude-scoped (Finding 5)
+# NET-04 live policy assertion — claude_egress + go_egress allowlists, passthrough, scoped
 # ---------------------------------------------------------------------------
 # Asserts the live effective sandbox policy:
-#   PASS requires: api.anthropic.com:443, platform.claude.com:443, and claude.ai:443 all
-#                  present with no `protocol` field (passthrough), at least one binary entry
-#                  matching */claude, statsig.anthropic.com ABSENT, sentry.io ABSENT.
+#   PASS requires: api.anthropic.com:443, platform.claude.com:443, claude.ai:443 (claude-scoped)
+#                  AND proxy.golang.org:443, sum.golang.org:443, vuln.go.dev:443 (go-scoped),
+#                  all with no `protocol` field (passthrough); statsig.anthropic.com ABSENT,
+#                  sentry.io ABSENT.
 #   FAIL on any violation — fatal (exit 1).
 assert_claude_egress_allowlist() {
     local sandbox_name="${1}"
     local policy_json
-    policy_json=$(openshell policy get "${sandbox_name}" --full -o json 2>&1)
+    # Guard the fetch: a failed or non-JSON `openshell policy get` must report itself, not
+    # silently feed garbage to the jq checks below (which would misfire as "host NOT found").
+    if ! policy_json=$(openshell policy get "${sandbox_name}" --full -o json 2>&1); then
+        log_error "NET-04: 'openshell policy get ${sandbox_name} --full -o json' failed — cannot assert policy"
+        log_error "Output: ${policy_json}"
+        exit 1
+    fi
+    if ! echo "${policy_json}" | jq empty >/dev/null 2>&1; then
+        log_error "NET-04: policy output is not valid JSON — sandbox may not be running or the policy endpoint errored"
+        log_error "Raw output: ${policy_json}"
+        exit 1
+    fi
 
     # --- Require all three Claude auth/API hosts to be present ---
     local -a required_hosts=("api.anthropic.com" "platform.claude.com" "claude.ai")
@@ -165,7 +182,59 @@ assert_claude_egress_allowlist() {
     fi
     log_info "NET-04: sentry.io absent (error-reporting blocked)"
 
-    log_info "NET-04 PASS: api.anthropic.com, platform.claude.com, claude.ai — all :443 passthrough, claude-scoped; statsig+sentry absent"
+    # --- Require the Go-toolchain egress hosts present, passthrough, go-scoped (Phase 4) ---
+    local -a required_go_hosts=("proxy.golang.org" "sum.golang.org" "vuln.go.dev")
+    for go_host in "${required_go_hosts[@]}"; do
+        if ! echo "${policy_json}" | jq -e \
+            --arg h "${go_host}" \
+            '.policy.network_policies // {} | to_entries[] | .value.endpoints[]? | select(.host == $h and .port == 443)' \
+            >/dev/null 2>&1; then
+            log_error "NET-04 VIOLATION: ${go_host}:443 NOT found in effective policy — go_egress allow missing!"
+            log_error "Policy output: ${policy_json}"
+            exit 1
+        fi
+        if echo "${policy_json}" | jq -e \
+            --arg h "${go_host}" \
+            '.policy.network_policies // {} | to_entries[] | .value.endpoints[]? | select(.host == $h) | select(.protocol != null)' \
+            >/dev/null 2>&1; then
+            log_error "NET-04 VIOLATION: ${go_host} endpoint has a 'protocol' field — must be omitted for TLS passthrough!"
+            log_error "Policy output: ${policy_json}"
+            exit 1
+        fi
+        log_info "NET-04: ${go_host}:443 present, no 'protocol' field (opaque passthrough confirmed)"
+    done
+
+    # --- Require the go_egress policy scoped to the Go toolchain (NOT the claude binary) ---
+    if ! echo "${policy_json}" | jq -e \
+        '.policy.network_policies // {} | to_entries[] | .value | select(.endpoints[]? | .host == "proxy.golang.org") | .binaries[]? | select(.path | test("/(go|golangci-lint|govulncheck)$"))' \
+        >/dev/null 2>&1; then
+        log_error "NET-04 VIOLATION: go_egress policy has no binary entry scoped to the Go toolchain!"
+        log_error "Policy output: ${policy_json}"
+        exit 1
+    fi
+    log_info "NET-04: Go hosts binary-scoped to the Go toolchain confirmed"
+
+    # --- Enforce OAuth-token isolation (CLAUDE.md security model): no cross-scoping. ---
+    # The policy containing the Claude hosts must NOT list a Go-toolchain binary, and the
+    # policy containing the Go hosts must NOT list a */claude binary. Without these negative
+    # assertions the isolation claim is assumed, not enforced (a stray binary would still PASS).
+    if echo "${policy_json}" | jq -e \
+        '.policy.network_policies // {} | to_entries[] | .value | select(.endpoints[]? | .host == "api.anthropic.com") | .binaries[]? | select(.path | test("/(go|golangci-lint|govulncheck)$"))' \
+        >/dev/null 2>&1; then
+        log_error "NET-04 VIOLATION: a Go-toolchain binary is scoped to the Claude (api.anthropic.com) egress policy — OAuth-token isolation broken!"
+        log_error "Policy output: ${policy_json}"
+        exit 1
+    fi
+    if echo "${policy_json}" | jq -e \
+        '.policy.network_policies // {} | to_entries[] | .value | select(.endpoints[]? | .host == "proxy.golang.org") | .binaries[]? | select(.path | test(".*/claude$"))' \
+        >/dev/null 2>&1; then
+        log_error "NET-04 VIOLATION: the claude binary is scoped to the go_egress policy — egress separation broken!"
+        log_error "Policy output: ${policy_json}"
+        exit 1
+    fi
+    log_info "NET-04: cross-scoping isolation confirmed (claude hosts not go-scoped; go hosts not claude-scoped)"
+
+    log_info "NET-04 PASS: claude_egress (api.anthropic.com, platform.claude.com, claude.ai — claude-scoped) + go_egress (proxy.golang.org, sum.golang.org, vuln.go.dev — go-scoped); all :443 passthrough; statsig+sentry absent"
 }
 
 # ---------------------------------------------------------------------------
@@ -235,7 +304,7 @@ VERB="rebuild"    # default verb
 # Accept positional verb as first argument; flags follow.
 if [[ $# -gt 0 ]]; then
     case "$1" in
-        rebuild|status|connect|login|down|audit)
+        rebuild|status|connect|login|claude|down|audit|audit-plugins)
             VERB="$1"
             shift
             ;;
@@ -245,7 +314,7 @@ if [[ $# -gt 0 ]]; then
             ;;
         *)
             log_error "Unknown verb or argument: $1"
-            echo "Usage: $0 [rebuild|status|connect|login|down|audit] [--cooldown-days N]" >&2
+            echo "Usage: $0 [rebuild|status|connect|login|claude|down|audit|audit-plugins] [--cooldown-days N]" >&2
             echo "       $0 [--cooldown-days N]   (shorthand for rebuild)" >&2
             echo "       $0 --audit               (shorthand for audit verb)" >&2
             exit 1
@@ -287,7 +356,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             log_error "Unknown argument: $1"
-            echo "Usage: $0 [rebuild|status|connect|login|down|audit] [--cooldown-days N]" >&2
+            echo "Usage: $0 [rebuild|status|connect|login|claude|down|audit|audit-plugins] [--cooldown-days N]" >&2
             exit 1
             ;;
     esac
@@ -362,6 +431,38 @@ case "${VERB}" in
         ;;
 
     # -----------------------------------------------------------------------
+    # claude — launch autonomous Claude session (D-01/D-02, RUN-01/RUN-02)
+    # -----------------------------------------------------------------------
+    # Execs claude --dangerously-skip-permissions --plugin-dir /opt/claude-engineering-toolkit
+    # inside the running sandbox via openshell sandbox exec --tty --workdir /claudeshared.
+    # Mirrors the connect/login exec pattern (D-01). No OAuth precondition check (D-02) —
+    # claude handles the unauthenticated case itself (prints its own login prompt).
+    # Prerequisites: sandbox created (./rebuild.sh) + OAuth login (./rebuild.sh login).
+    claude)
+        ensure_podman_ready
+        log_info "Launching Claude Code autonomously in sandbox ${SANDBOX_NAME} (cwd: ${SHARED_DIR})..."
+        log_info "Plugin dir: /opt/claude-engineering-toolkit"
+        log_info "Prerequisites: sandbox created (./rebuild.sh) + OAuth login (./rebuild.sh login)"
+        # Interactive TTY session: preserve claude's real exit code (normal /exit -> 0,
+        # Ctrl-C -> 130) instead of forcing exit 1. Only emit the sandbox-health hint for a
+        # genuine failure — not a routine user interrupt.
+        set +e
+        openshell sandbox exec \
+            --name "${SANDBOX_NAME}" \
+            --tty \
+            --workdir "${SHARED_DIR}" \
+            -- claude \
+                --dangerously-skip-permissions \
+                --plugin-dir /opt/claude-engineering-toolkit
+        exec_rc=$?
+        set -e
+        if [[ ${exec_rc} -ne 0 && ${exec_rc} -ne 130 ]]; then
+            log_error "'openshell sandbox exec' for sandbox '${SANDBOX_NAME}' exited ${exec_rc} — if the session didn't start, check './rebuild.sh status' / './rebuild.sh login'."
+        fi
+        exit "${exec_rc}"
+        ;;
+
+    # -----------------------------------------------------------------------
     # down — idempotent sandbox delete (no native stop; down = delete)
     # -----------------------------------------------------------------------
     down)
@@ -391,6 +492,19 @@ case "${VERB}" in
     audit)
         log_info "Surfacing openshell logs for ${SANDBOX_NAME} (audit — no build/teardown/create)"
         audit_sandbox "${SANDBOX_NAME}" "${AUDIT_SINCE}"
+        exit 0
+        ;;
+
+    # -----------------------------------------------------------------------
+    # audit-plugins — strict headless plugin audit (D-05)
+    # -----------------------------------------------------------------------
+    # Distinct from the log-surfacing `audit` verb: this drives every toolkit
+    # agent + skill headless against the running sandbox and HARD-FAILS (exit 1)
+    # on any expected/actual mismatch (D-10). Thin wrapper over the harness.
+    # Prerequisites: sandbox Ready + OAuth'd (./rebuild.sh + ./rebuild.sh login).
+    audit-plugins)
+        log_info "Running strict headless plugin audit for ${SANDBOX_NAME} (hard-fails on any mismatch — distinct from the log-surfacing 'audit' verb)"
+        bash "${PROJECT_ROOT}/scripts/audit-plugins.sh" "${SANDBOX_NAME}" "${SHARED_DIR}"
         exit 0
         ;;
 
@@ -546,5 +660,6 @@ log_info "  (open the URL in a browser OUTSIDE the sandbox, paste the code back)
 log_info ""
 log_info "Other verbs:"
 log_info "  ./rebuild.sh connect   # attach to sandbox shell"
+log_info "  ./rebuild.sh claude    # launch autonomous Claude session (--dangerously-skip-permissions + plugin-dir)"
 log_info "  ./rebuild.sh audit     # surface openshell logs"
 log_info "  ./rebuild.sh down      # delete sandbox (re-login required after next rebuild)"

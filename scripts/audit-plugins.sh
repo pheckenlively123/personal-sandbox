@@ -26,9 +26,10 @@
 
 set -euo pipefail
 
-# Clean interrupt: if the operator Ctrl-C's mid-loop, exit with a clear message and the
-# conventional 130 (SIGINT) rather than a bare set -e abort mid-invocation.
-trap 'echo "" >&2; echo "ERROR: audit-plugins interrupted (SIGINT/SIGTERM) — partial run, no summary." >&2; exit 130' INT TERM
+# Clean interrupt: exit with the conventional signal code (130 = SIGINT, 143 = SIGTERM)
+# and a clear message, rather than a bare set -e abort mid-invocation.
+trap 'echo "" >&2; echo "ERROR: audit-plugins interrupted (SIGINT) — partial run, no summary." >&2; exit 130' INT
+trap 'echo "" >&2; echo "ERROR: audit-plugins terminated (SIGTERM) — partial run, no summary." >&2; exit 143' TERM
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"

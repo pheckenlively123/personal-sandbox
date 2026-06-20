@@ -443,17 +443,23 @@ case "${VERB}" in
         log_info "Launching Claude Code autonomously in sandbox ${SANDBOX_NAME} (cwd: ${SHARED_DIR})..."
         log_info "Plugin dir: /opt/claude-engineering-toolkit"
         log_info "Prerequisites: sandbox created (./rebuild.sh) + OAuth login (./rebuild.sh login)"
-        if ! openshell sandbox exec \
+        # Interactive TTY session: preserve claude's real exit code (normal /exit -> 0,
+        # Ctrl-C -> 130) instead of forcing exit 1. Only emit the sandbox-health hint for a
+        # genuine failure — not a routine user interrupt.
+        set +e
+        openshell sandbox exec \
             --name "${SANDBOX_NAME}" \
             --tty \
             --workdir "${SHARED_DIR}" \
             -- claude \
                 --dangerously-skip-permissions \
-                --plugin-dir /opt/claude-engineering-toolkit; then
-            log_error "'openshell sandbox exec' failed (or claude exited non-zero) for sandbox '${SANDBOX_NAME}' — is it running? Check './rebuild.sh status' / './rebuild.sh login'."
-            exit 1
+                --plugin-dir /opt/claude-engineering-toolkit
+        exec_rc=$?
+        set -e
+        if [[ ${exec_rc} -ne 0 && ${exec_rc} -ne 130 ]]; then
+            log_error "'openshell sandbox exec' for sandbox '${SANDBOX_NAME}' exited ${exec_rc} — if the session didn't start, check './rebuild.sh status' / './rebuild.sh login'."
         fi
-        exit 0
+        exit "${exec_rc}"
         ;;
 
     # -----------------------------------------------------------------------

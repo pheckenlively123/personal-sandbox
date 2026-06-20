@@ -6,16 +6,16 @@
 
 A reproducible, network-isolated development sandbox — built as an NVIDIA OpenShell sandbox from a Fedora 44 image — for running Claude Code with `--dangerously-skip-permissions` safely. The sandbox bundles a Go toolchain and the claude-engineering-toolkit plugins, applies supply-chain cooldown pinning to its dependencies, and mounts `~/claudeshared` read-write so the operator can clone repos there and do development with Claude inside the sandbox. It is for a developer who wants to give Claude elevated, autonomous permissions without exposing the host or the open internet.
 
-**Core Value:** Claude can run fully autonomous (`--dangerously-skip-permissions`) inside a sandbox with a **three-host, binary-scoped, TLS-opaque Claude egress allowlist** — `api.anthropic.com:443` (inference), `platform.claude.com:443` (Console auth), and `claude.ai:443` (claude.ai auth) — and **nothing else reaches the open internet**. All three are TLS passthrough (no decryption, no credential injection), scoped to the `claude` binary. `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` disables telemetry/auto-update so `statsig.anthropic.com`, `sentry.io`, and `downloads.claude.ai` are never contacted.
+**Core Value:** Claude can run fully autonomous (`--dangerously-skip-permissions`) inside a sandbox with **two independently binary-scoped, TLS-opaque egress allowlists** and **nothing else reaches the open internet**. The `claude` binary reaches only the three Claude auth/API hosts — `api.anthropic.com:443` (inference), `platform.claude.com:443` (Console auth), `claude.ai:443` (claude.ai auth); the Go toolchain (`go`, `golangci-lint`, `govulncheck`) reaches only the three Go-tooling hosts — `proxy.golang.org:443` (modules), `sum.golang.org:443` (checksums), `vuln.go.dev:443` (govulncheck DB), so the toolkit's `lint`/`test`/`vuln` reviewers work against non-vendored Go projects under `/claudeshared`. Both allowlists are TLS passthrough (no decryption, no credential injection); the OAuth token transits the Claude allowlist only and the Go binaries cannot reach the Claude hosts (or vice versa). `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` disables telemetry/auto-update so `statsig.anthropic.com`, `sentry.io`, and `downloads.claude.ai` are never contacted.
 
-**Accepted trade-off:** The subscription OAuth token lives inside the sandbox at `~/.claude/.credentials.json` (written by the in-sandbox `claude` OAuth login flow). Mitigations: egress is restricted to the three Claude auth/API hosts only; the policy is binary-scoped to `claude`; the sandbox is deleted between sessions with `./rebuild.sh down`.
+**Accepted trade-off:** The subscription OAuth token lives inside the sandbox at `~/.claude/.credentials.json` (written by the in-sandbox `claude` OAuth login flow). Mitigations: the `claude` binary's egress is restricted to the three Claude auth/API hosts only and binary-scoped to `claude` (the Go-tooling allowlist is scoped to the Go binaries and cannot reach the token's hosts); the sandbox is deleted between sessions with `./rebuild.sh down`.
 
 ### Constraints
 
 - **Platform**: Sandbox runtime must be NVIDIA OpenShell — built/managed via the `openshell` CLI on this host.
 - **Build tool**: Container image must be built with podman (`podman build`), not the Docker daemon. The image reference is then handed to `openshell sandbox create --from <image-ref>`.
 - **Base image**: Fedora 44 — base for the sandbox image.
-- **Network**: Running sandbox allows ONLY `api.anthropic.com:443`, `platform.claude.com:443`, and `claude.ai:443` (all TLS passthrough, binary-scoped to `claude`). No `statsig.anthropic.com`, no `sentry.io`, no open internet. `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` keeps telemetry/auto-update hosts unused. Claude Code authenticates via in-sandbox subscription OAuth login (no `ANTHROPIC_API_KEY`, no `inference.local` gateway).
+- **Network**: Running sandbox allows two binary-scoped allowlists and nothing else. `claude_egress` (scoped to `/usr/bin/claude`, `/usr/local/bin/claude`): `api.anthropic.com:443`, `platform.claude.com:443`, `claude.ai:443`. `go_egress` (scoped to `/usr/bin/go`, `/usr/bin/golangci-lint`, `/usr/local/bin/govulncheck`): `proxy.golang.org:443`, `sum.golang.org:443`, `vuln.go.dev:443` — added in Phase 4 so the toolkit's Go reviewers (`lint`/`test`/`vuln`) can resolve modules + the vuln DB. All six are TLS passthrough. No `statsig.anthropic.com`, no `sentry.io`, no open internet. `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` keeps telemetry/auto-update hosts unused. Claude Code authenticates via in-sandbox subscription OAuth login (no `ANTHROPIC_API_KEY`, no `inference.local` gateway).
 - **Supply chain**: govulncheck, gsd-core (+ all deps), and Claude Code CLI pinned to "latest as of 4 days before build" (rolling). Cooldown window default 4 days.
 - **Install methods**: Go and golangci-lint via RPM; govulncheck via `go install`; gsd-core + Claude Code via their package managers (npm).
 - **Reproducibility**: rebuild must be script-driven and repeatable.
@@ -54,16 +54,22 @@ A reproducible, network-isolated development sandbox — built as an NVIDIA Open
 - OpenShell rejects mount targets that overlap with `/etc/openshell`, `/etc/openshell-tls`, workspace root, or supervisor paths.
 - Named volumes (`type: volume`) do NOT require `enable_bind_mounts = true` unless the named volume itself is bind-backed.
 
-### Network Policy — Three-Host Claude Egress Allowlist (Architecture B)
+### Network Policy — Two Binary-Scoped Egress Allowlists (Architecture B)
 
-- Sandbox allows ONLY three Claude auth/API hosts (all TLS passthrough, proxy never decrypts the stream):
+- Sandbox allows two independently binary-scoped allowlists (all TLS passthrough, proxy never decrypts the stream); everything else denied.
+- `claude_egress` — scoped to `/usr/bin/claude` and `/usr/local/bin/claude`:
   - `api.anthropic.com:443` — model inference
   - `platform.claude.com:443` — Console/Claude account authentication (OAuth)
   - `claude.ai:443` — claude.ai account authentication (OAuth)
-- Binary-scoped to `/usr/bin/claude` and `/usr/local/bin/claude` — arbitrary processes cannot use the egress hole
+- `go_egress` — scoped to `/usr/bin/go`, `/usr/bin/golangci-lint`, `/usr/local/bin/govulncheck` (Phase 4 / 04-03 audit enablement):
+  - `proxy.golang.org:443` — Go module proxy (go / golangci-lint / go test)
+  - `sum.golang.org:443` — Go checksum database (go verifies `go.sum` by default)
+  - `vuln.go.dev:443` — govulncheck vulnerability database
+  - Enables the toolkit's `lint`/`test`/`vuln` reviewers to run their Go tools against non-vendored projects under `/claudeshared`. The Go binaries cannot reach the Claude hosts and `claude` cannot reach the Go hosts — the OAuth token stays isolated to `claude_egress`.
+- Binary-scoping means arbitrary processes cannot use either egress hole
 - `statsig.anthropic.com` and `sentry.io` intentionally absent; `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` suppresses those code paths
 - All other egress denied (no `curl google.com`, no git clone at runtime, etc.)
-- NET-05 asserts deny posture via `curl` (blocked by binary-scoping); reachability validated by `./rebuild.sh login`
+- NET-04 asserts both allowlists present, passthrough, and correctly scoped (+ statsig/sentry absent); NET-05 asserts deny posture via `curl` (blocked by binary-scoping); Claude reachability validated by `./rebuild.sh login`
 - No `inference.local` gateway, no `ANTHROPIC_API_KEY`, no host-side `openshell provider create`
 - Claude Code authenticates via in-sandbox OAuth login: `./rebuild.sh login` → browser URL outside sandbox → paste code
 

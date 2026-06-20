@@ -105,11 +105,11 @@
 
 > **Architecture B note (reconciled in 04-02 / D-13):** criteria above predate the Phase 3 pivot. Criterion #2's "zero-egress sandbox" means the **3-host-allowlist sandbox** (api.anthropic.com / platform.claude.com / claude.ai); criterion #3 means the policy denies all non-allowlisted hosts while Claude operates correctly. The 10s bound = "no plugin produces an exit-124 timeout" (legitimate model latency may exceed 10s).
 
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 
 **Wave 1**
 
-- [ ] 04-01-PLAN.md — Blocker fixes: add `/opt` to policy.yaml Landlock read_only + Dockerfile govulncheck copy to /usr/local/bin + CMD repoint to /bin/bash; rebuild + recreate + verify toolkit loaded (RUN-02)
+- [x] 04-01-PLAN.md — Blocker fixes: add `/opt` to policy.yaml Landlock read_only + Dockerfile govulncheck copy to /usr/local/bin + CMD repoint to /bin/bash; rebuild + recreate + verify toolkit loaded (RUN-02)
 
 **Wave 2** *(blocked on Wave 1 — needs rebuilt sandbox)*
 
@@ -128,7 +128,7 @@
 | 1. Dockerfile and Supply-Chain Pinning | 3/3 | Complete    | 2026-06-14 |
 | 2. Rebuild Script and Sandbox Lifecycle | 2/2 | Complete    | 2026-06-15 |
 | 3. Network Isolation and Inference Validation | 2/2 | Complete   | 2026-06-16 |
-| 4. Claude Code Launch and MCP Audit | 0/3 | Planned | - |
+| 4. Claude Code Launch and MCP Audit | 1/3 | In Progress|  |
 
 ---
 

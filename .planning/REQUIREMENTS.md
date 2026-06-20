@@ -36,7 +36,7 @@ Requirements for the initial release. Each maps to a roadmap phase.
 ### Runtime & Claude Launch (RUN)
 
 - [ ] **RUN-01**: Claude is launched with `--dangerously-skip-permissions`
-- [ ] **RUN-02**: Claude is launched with `--plugin-dir` pointed at the cloned claude-engineering-toolkit so its agents and skills are loaded
+- [x] **RUN-02**: Claude is launched with `--plugin-dir` pointed at the cloned claude-engineering-toolkit so its agents and skills are loaded
 - [x] **RUN-03**: `~/claudeshared` is bind-mounted into the sandbox with read-write access
 - [x] **RUN-04**: The bind mount has correct UID/ownership alignment so Claude can read and write files that remain editable from the host
 
@@ -100,7 +100,7 @@ Populated at roadmap creation. Each requirement maps to exactly one phase.
 | NET-04 | Phase 3 | Complete |
 | NET-05 | Phase 3 | Complete |
 | RUN-01 | Phase 4 | Pending |
-| RUN-02 | Phase 4 | Pending |
+| RUN-02 | Phase 4 | Complete |
 | RUN-03 | Phase 2 | Complete |
 | RUN-04 | Phase 2 | Complete |
 | BLD-01 | Phase 2 | Complete |

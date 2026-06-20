@@ -6,6 +6,7 @@
 #   ./rebuild.sh status                           # Status summary (read-only)
 #   ./rebuild.sh connect                          # Attach to running sandbox shell
 #   ./rebuild.sh login                            # Connect + launch Claude OAuth login flow
+#   ./rebuild.sh claude                           # Launch autonomous Claude session (--dangerously-skip-permissions + --plugin-dir)
 #   ./rebuild.sh down                             # Delete sandbox (idempotent)
 #   ./rebuild.sh audit [--since <ts>]             # Surface openshell logs
 #
@@ -235,7 +236,7 @@ VERB="rebuild"    # default verb
 # Accept positional verb as first argument; flags follow.
 if [[ $# -gt 0 ]]; then
     case "$1" in
-        rebuild|status|connect|login|down|audit)
+        rebuild|status|connect|login|claude|down|audit)
             VERB="$1"
             shift
             ;;
@@ -245,7 +246,7 @@ if [[ $# -gt 0 ]]; then
             ;;
         *)
             log_error "Unknown verb or argument: $1"
-            echo "Usage: $0 [rebuild|status|connect|login|down|audit] [--cooldown-days N]" >&2
+            echo "Usage: $0 [rebuild|status|connect|login|claude|down|audit] [--cooldown-days N]" >&2
             echo "       $0 [--cooldown-days N]   (shorthand for rebuild)" >&2
             echo "       $0 --audit               (shorthand for audit verb)" >&2
             exit 1
@@ -287,7 +288,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             log_error "Unknown argument: $1"
-            echo "Usage: $0 [rebuild|status|connect|login|down|audit] [--cooldown-days N]" >&2
+            echo "Usage: $0 [rebuild|status|connect|login|claude|down|audit] [--cooldown-days N]" >&2
             exit 1
             ;;
     esac
@@ -358,6 +359,29 @@ case "${VERB}" in
         log_info "The token is stored at ~/.claude/.credentials.json INSIDE the sandbox."
         log_info "Connecting to sandbox (cwd: ${SHARED_DIR}) — run 'claude' inside to begin OAuth flow..."
         openshell sandbox exec --name "${SANDBOX_NAME}" --tty --workdir "${SHARED_DIR}" -- /bin/bash
+        exit 0
+        ;;
+
+    # -----------------------------------------------------------------------
+    # claude — launch autonomous Claude session (D-01/D-02, RUN-01/RUN-02)
+    # -----------------------------------------------------------------------
+    # Execs claude --dangerously-skip-permissions --plugin-dir /opt/claude-engineering-toolkit
+    # inside the running sandbox via openshell sandbox exec --tty --workdir /claudeshared.
+    # Mirrors the connect/login exec pattern (D-01). No OAuth precondition check (D-02) —
+    # claude handles the unauthenticated case itself (prints its own login prompt).
+    # Prerequisites: sandbox created (./rebuild.sh) + OAuth login (./rebuild.sh login).
+    claude)
+        ensure_podman_ready
+        log_info "Launching Claude Code autonomously in sandbox ${SANDBOX_NAME} (cwd: ${SHARED_DIR})..."
+        log_info "Plugin dir: /opt/claude-engineering-toolkit"
+        log_info "Prerequisites: sandbox created (./rebuild.sh) + OAuth login (./rebuild.sh login)"
+        openshell sandbox exec \
+            --name "${SANDBOX_NAME}" \
+            --tty \
+            --workdir "${SHARED_DIR}" \
+            -- claude \
+                --dangerously-skip-permissions \
+                --plugin-dir /opt/claude-engineering-toolkit
         exit 0
         ;;
 
@@ -546,5 +570,6 @@ log_info "  (open the URL in a browser OUTSIDE the sandbox, paste the code back)
 log_info ""
 log_info "Other verbs:"
 log_info "  ./rebuild.sh connect   # attach to sandbox shell"
+log_info "  ./rebuild.sh claude    # launch autonomous Claude session (--dangerously-skip-permissions + plugin-dir)"
 log_info "  ./rebuild.sh audit     # surface openshell logs"
 log_info "  ./rebuild.sh down      # delete sandbox (re-login required after next rebuild)"

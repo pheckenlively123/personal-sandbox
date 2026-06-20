@@ -26,6 +26,10 @@
 
 set -euo pipefail
 
+# Clean interrupt: if the operator Ctrl-C's mid-loop, exit with a clear message and the
+# conventional 130 (SIGINT) rather than a bare set -e abort mid-invocation.
+trap 'echo "" >&2; echo "ERROR: audit-plugins interrupted (SIGINT/SIGTERM) — partial run, no summary." >&2; exit 130' INT TERM
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
@@ -149,7 +153,7 @@ run_plugin_audit() {
             # D-10: exit 0 alone is not a PASS — output MUST contain a network/MCP error pattern.
             # A MUST_FAIL_CLEAN plugin that exits 0 WITHOUT a clean network/MCP error is an
             # expected/actual MISMATCH → hard-fail (increment VIOLATIONS). No WARN escape.
-            if echo "${output}" | grep -qiE "403|connection refused|not available|tool.*not.*found|cannot connect|network unreachable|unauthorized|mcp.*error|tool call failed"; then
+            if echo "${output}" | grep -qiE "40[13]|connection refused|econnrefused|etimedout|ehostunreach|not available|tool.*not.*found|cannot connect|network unreachable|network error|fetch failed|request failed|unauthorized|mcp.*error|tool call failed"; then
                 echo "PASS [FAIL_CLEAN] ${plugin_name} (${wall_secs}s)"
             else
                 echo "FAIL [MISMATCH] ${plugin_name}: expected clean failure but exited 0 with no network/MCP error (${wall_secs}s)"
@@ -189,13 +193,26 @@ check_telemetry_suppression() {
 
     log_step "T" "Telemetry suppression check (since ${since_arg})"
 
+    # Do NOT swallow a logs-fetch failure into an empty string — that would drop the
+    # statsig/sentry counts to 0 and report a FALSE telemetry PASS (criterion #3 silently
+    # not evaluated). A failed fetch is itself a violation.
     local log_output
-    log_output=$(openshell logs "${sandbox_name}" --source sandbox --since "${since_arg}" -n 2000 || true)
+    if ! log_output=$(openshell logs "${sandbox_name}" --source sandbox --since "${since_arg}" -n 2000 2>&1); then
+        log_error "TELEMETRY: 'openshell logs ${sandbox_name}' failed — cannot assert telemetry suppression (criterion #3 NOT evaluated)"
+        log_error "Output: ${log_output}"
+        VIOLATIONS=$(( VIOLATIONS + 1 ))
+        FAILED_PLUGINS="${FAILED_PLUGINS} telemetry[log-fetch-failed]"
+        return 0
+    fi
 
-    # statsig and sentry MUST produce zero claude.exe denial entries (criterion #3)
+    # statsig and sentry MUST produce zero claude.exe denial entries (criterion #3).
+    # grep -c prints the count (0 on no match) and exits 1 when 0 — `|| true` keeps that "0";
+    # `${x:-0}` guards the rare grep-error (exit 2) empty-output case so the arithmetic test
+    # below can never abort under `set -e`. (Do NOT use `|| echo 0` — grep already printed "0",
+    # so that form would double-count to "0\n0".)
     local statsig_count sentry_count
-    statsig_count=$(echo "${log_output}" | grep -c 'DENIED.*claude\.exe.*statsig' || true)
-    sentry_count=$(echo "${log_output}" | grep -c 'DENIED.*claude\.exe.*sentry' || true)
+    statsig_count=$(echo "${log_output}" | grep -c 'DENIED.*claude\.exe.*statsig' || true); statsig_count=${statsig_count:-0}
+    sentry_count=$(echo "${log_output}" | grep -c 'DENIED.*claude\.exe.*sentry' || true); sentry_count=${sentry_count:-0}
 
     if [[ "${statsig_count}" -gt 0 ]]; then
         log_error "TELEMETRY FAIL: claude.exe attempted statsig.anthropic.com ${statsig_count} time(s) — not suppressed by CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"
@@ -219,9 +236,9 @@ check_telemetry_suppression() {
 
     # Document expected denials (informational only — policy is working correctly)
     local mcp_proxy_count datadog_count downloads_count
-    mcp_proxy_count=$(echo "${log_output}" | grep -c 'DENIED.*claude\.exe.*mcp-proxy\.anthropic\.com' || true)
-    datadog_count=$(echo "${log_output}" | grep -c 'DENIED.*claude\.exe.*datadoghq\.com' || true)
-    downloads_count=$(echo "${log_output}" | grep -c 'DENIED.*claude\.exe.*downloads\.claude\.ai' || true)
+    mcp_proxy_count=$(echo "${log_output}" | grep -c 'DENIED.*claude\.exe.*mcp-proxy\.anthropic\.com' || true); mcp_proxy_count=${mcp_proxy_count:-0}
+    datadog_count=$(echo "${log_output}" | grep -c 'DENIED.*claude\.exe.*datadoghq\.com' || true); datadog_count=${datadog_count:-0}
+    downloads_count=$(echo "${log_output}" | grep -c 'DENIED.*claude\.exe.*downloads\.claude\.ai' || true); downloads_count=${downloads_count:-0}
 
     log_info "TELEMETRY INFO: mcp-proxy.anthropic.com denied ${mcp_proxy_count} time(s) — MCP registry lookup, policy working correctly"
     log_info "TELEMETRY INFO: datadoghq.com denied ${datadog_count} time(s) — logging endpoint, policy working correctly"

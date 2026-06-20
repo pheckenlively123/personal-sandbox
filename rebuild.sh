@@ -114,7 +114,18 @@ ensure_podman_ready() {
 assert_claude_egress_allowlist() {
     local sandbox_name="${1}"
     local policy_json
-    policy_json=$(openshell policy get "${sandbox_name}" --full -o json 2>&1)
+    # Guard the fetch: a failed or non-JSON `openshell policy get` must report itself, not
+    # silently feed garbage to the jq checks below (which would misfire as "host NOT found").
+    if ! policy_json=$(openshell policy get "${sandbox_name}" --full -o json 2>&1); then
+        log_error "NET-04: 'openshell policy get ${sandbox_name} --full -o json' failed — cannot assert policy"
+        log_error "Output: ${policy_json}"
+        exit 1
+    fi
+    if ! echo "${policy_json}" | jq empty >/dev/null 2>&1; then
+        log_error "NET-04: policy output is not valid JSON — sandbox may not be running or the policy endpoint errored"
+        log_error "Raw output: ${policy_json}"
+        exit 1
+    fi
 
     # --- Require all three Claude auth/API hosts to be present ---
     local -a required_hosts=("api.anthropic.com" "platform.claude.com" "claude.ai")
@@ -187,6 +198,7 @@ assert_claude_egress_allowlist() {
             '.policy.network_policies // {} | to_entries[] | .value.endpoints[]? | select(.host == $h) | select(.protocol != null)' \
             >/dev/null 2>&1; then
             log_error "NET-04 VIOLATION: ${go_host} endpoint has a 'protocol' field — must be omitted for TLS passthrough!"
+            log_error "Policy output: ${policy_json}"
             exit 1
         fi
         log_info "NET-04: ${go_host}:443 present, no 'protocol' field (opaque passthrough confirmed)"
@@ -201,6 +213,26 @@ assert_claude_egress_allowlist() {
         exit 1
     fi
     log_info "NET-04: Go hosts binary-scoped to the Go toolchain confirmed"
+
+    # --- Enforce OAuth-token isolation (CLAUDE.md security model): no cross-scoping. ---
+    # The policy containing the Claude hosts must NOT list a Go-toolchain binary, and the
+    # policy containing the Go hosts must NOT list a */claude binary. Without these negative
+    # assertions the isolation claim is assumed, not enforced (a stray binary would still PASS).
+    if echo "${policy_json}" | jq -e \
+        '.policy.network_policies // {} | to_entries[] | .value | select(.endpoints[]? | .host == "api.anthropic.com") | .binaries[]? | select(.path | test("/(go|golangci-lint|govulncheck)$"))' \
+        >/dev/null 2>&1; then
+        log_error "NET-04 VIOLATION: a Go-toolchain binary is scoped to the Claude (api.anthropic.com) egress policy — OAuth-token isolation broken!"
+        log_error "Policy output: ${policy_json}"
+        exit 1
+    fi
+    if echo "${policy_json}" | jq -e \
+        '.policy.network_policies // {} | to_entries[] | .value | select(.endpoints[]? | .host == "proxy.golang.org") | .binaries[]? | select(.path | test(".*/claude$"))' \
+        >/dev/null 2>&1; then
+        log_error "NET-04 VIOLATION: the claude binary is scoped to the go_egress policy — egress separation broken!"
+        log_error "Policy output: ${policy_json}"
+        exit 1
+    fi
+    log_info "NET-04: cross-scoping isolation confirmed (claude hosts not go-scoped; go hosts not claude-scoped)"
 
     log_info "NET-04 PASS: claude_egress (api.anthropic.com, platform.claude.com, claude.ai — claude-scoped) + go_egress (proxy.golang.org, sum.golang.org, vuln.go.dev — go-scoped); all :443 passthrough; statsig+sentry absent"
 }
@@ -411,13 +443,16 @@ case "${VERB}" in
         log_info "Launching Claude Code autonomously in sandbox ${SANDBOX_NAME} (cwd: ${SHARED_DIR})..."
         log_info "Plugin dir: /opt/claude-engineering-toolkit"
         log_info "Prerequisites: sandbox created (./rebuild.sh) + OAuth login (./rebuild.sh login)"
-        openshell sandbox exec \
+        if ! openshell sandbox exec \
             --name "${SANDBOX_NAME}" \
             --tty \
             --workdir "${SHARED_DIR}" \
             -- claude \
                 --dangerously-skip-permissions \
-                --plugin-dir /opt/claude-engineering-toolkit
+                --plugin-dir /opt/claude-engineering-toolkit; then
+            log_error "'openshell sandbox exec' failed (or claude exited non-zero) for sandbox '${SANDBOX_NAME}' — is it running? Check './rebuild.sh status' / './rebuild.sh login'."
+            exit 1
+        fi
         exit 0
         ;;
 

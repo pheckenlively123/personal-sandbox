@@ -108,7 +108,7 @@
 
 > **Architecture B note (reconciled in 04-02 / D-13):** criteria above predate the Phase 3 pivot. Criterion #2's "zero-egress sandbox" means the **3-host-allowlist sandbox** (api.anthropic.com / platform.claude.com / claude.ai); criterion #3 means the policy denies all non-allowlisted hosts while Claude operates correctly. The 10s bound = "no plugin produces an exit-124 timeout" (legitimate model latency may exceed 10s).
 
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 **Wave 1**
 
@@ -116,7 +116,7 @@
 
 **Wave 2** *(blocked on Wave 1 — needs rebuilt sandbox)*
 
-- [ ] 04-02-PLAN.md — `claude` launch verb (RUN-01, RUN-02) reusing the connect/login exec pattern + D-13 doc reconciliation of ROADMAP/REQUIREMENTS/PROJECT.md to Architecture B
+- [x] 04-02-PLAN.md — `claude` launch verb (RUN-01, RUN-02) reusing the connect/login exec pattern + D-13 doc reconciliation of ROADMAP/REQUIREMENTS/PROJECT.md to Architecture B
 
 **Wave 3** *(blocked on Wave 1+2 — shares rebuild.sh with 04-02)*
 
@@ -131,7 +131,7 @@
 | 1. Dockerfile and Supply-Chain Pinning | 3/3 | Complete    | 2026-06-14 |
 | 2. Rebuild Script and Sandbox Lifecycle | 2/2 | Complete    | 2026-06-15 |
 | 3. Network Isolation and Inference Validation | 2/2 | Complete   | 2026-06-16 |
-| 4. Claude Code Launch and MCP Audit | 1/3 | In Progress|  |
+| 4. Claude Code Launch and MCP Audit | 2/3 | In Progress|  |
 
 ---
 

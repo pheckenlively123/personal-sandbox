@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-last_updated: "2026-06-20T00:30:11.281Z"
+last_updated: "2026-06-20T00:43:16.626Z"
 progress:
   total_phases: 4
   completed_phases: 3
   total_plans: 10
-  completed_plans: 8
+  completed_plans: 9
   percent: 75
 ---
 
@@ -27,7 +27,7 @@ progress:
 ## Current Position
 
 Phase: 04 (claude-code-launch-and-mcp-audit) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 **Phase**: 2 — Rebuild Script and Sandbox Lifecycle
 **Plan**: 02-02 — Ready to execute
 **Status**: 02-01 complete (BLD-03 satisfied); ready to start 02-02 (rebuild.sh end-to-end slice)
@@ -68,6 +68,7 @@ Plan: 2 of 3
 | Phase 02 P01 | 20min | 3 tasks | 2 files |
 | Phase 03 P01 | 3min | 2 tasks | 1 files |
 | Phase 04 P01 | 30min | 2 tasks | 2 files |
+| Phase 04 P02 | 20min | - tasks | - files |
 
 ### Open Questions / Risks
 
@@ -125,3 +126,6 @@ Plan: 2 of 3
 - [Phase ?]: Add /opt to policy.yaml read_only only (Blocker 1 / T-04-02 mitigated): toolkit is operator fork, no runtime writes
 - [Phase ?]: Copy govulncheck from /root/go/bin to /usr/local/bin at build time (Blocker 2): Landlock default-deny blocks GOPATH for sandbox user
 - [Phase ?]: CMD repointed to /bin/bash (D-03): OpenShell supervisor is PID 1 and never executes image CMD; canonical launch is ./rebuild.sh claude (04-02)
+- [Phase ?]: D-01 resolved: claude verb ships in rebuild.sh reusing the connect/login exec --tty --workdir /claudeshared pattern (04-02)
+- [Phase ?]: D-02 resolved: no OAuth precondition check in claude verb — claude handles unauthenticated case itself (04-02)
+- [Phase ?]: D-13 resolved: ROADMAP/REQUIREMENTS/PROJECT.md reconciled to Architecture B; inference.local/gateway/zero-egress references removed; 3-host TLS-passthrough allowlist wording now consistent (04-02)

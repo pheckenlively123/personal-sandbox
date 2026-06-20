@@ -9,6 +9,7 @@
 #   ./rebuild.sh claude                           # Launch autonomous Claude session (--dangerously-skip-permissions + --plugin-dir)
 #   ./rebuild.sh down                             # Delete sandbox (idempotent)
 #   ./rebuild.sh audit [--since <ts>]             # Surface openshell logs
+#   ./rebuild.sh audit-plugins                    # Strict headless plugin audit (hard-fails on mismatch)
 #
 # Architecture B — hardened to claude-egress-allowlist direct egress:
 #   - Claude Code runs INSIDE the sandbox and connects DIRECTLY to the three Claude hosts:
@@ -236,7 +237,7 @@ VERB="rebuild"    # default verb
 # Accept positional verb as first argument; flags follow.
 if [[ $# -gt 0 ]]; then
     case "$1" in
-        rebuild|status|connect|login|claude|down|audit)
+        rebuild|status|connect|login|claude|down|audit|audit-plugins)
             VERB="$1"
             shift
             ;;
@@ -246,7 +247,7 @@ if [[ $# -gt 0 ]]; then
             ;;
         *)
             log_error "Unknown verb or argument: $1"
-            echo "Usage: $0 [rebuild|status|connect|login|claude|down|audit] [--cooldown-days N]" >&2
+            echo "Usage: $0 [rebuild|status|connect|login|claude|down|audit|audit-plugins] [--cooldown-days N]" >&2
             echo "       $0 [--cooldown-days N]   (shorthand for rebuild)" >&2
             echo "       $0 --audit               (shorthand for audit verb)" >&2
             exit 1
@@ -288,7 +289,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             log_error "Unknown argument: $1"
-            echo "Usage: $0 [rebuild|status|connect|login|claude|down|audit] [--cooldown-days N]" >&2
+            echo "Usage: $0 [rebuild|status|connect|login|claude|down|audit|audit-plugins] [--cooldown-days N]" >&2
             exit 1
             ;;
     esac
@@ -415,6 +416,19 @@ case "${VERB}" in
     audit)
         log_info "Surfacing openshell logs for ${SANDBOX_NAME} (audit — no build/teardown/create)"
         audit_sandbox "${SANDBOX_NAME}" "${AUDIT_SINCE}"
+        exit 0
+        ;;
+
+    # -----------------------------------------------------------------------
+    # audit-plugins — strict headless plugin audit (D-05)
+    # -----------------------------------------------------------------------
+    # Distinct from the log-surfacing `audit` verb: this drives every toolkit
+    # agent + skill headless against the running sandbox and HARD-FAILS (exit 1)
+    # on any expected/actual mismatch (D-10). Thin wrapper over the harness.
+    # Prerequisites: sandbox Ready + OAuth'd (./rebuild.sh + ./rebuild.sh login).
+    audit-plugins)
+        log_info "Running strict headless plugin audit for ${SANDBOX_NAME} (hard-fails on any mismatch — distinct from the log-surfacing 'audit' verb)"
+        bash "${PROJECT_ROOT}/scripts/audit-plugins.sh" "${SANDBOX_NAME}" "${SHARED_DIR}"
         exit 0
         ;;
 

@@ -109,15 +109,16 @@ CLAUDE.md Core Value + Network Policy reconciled.
 | 260619-fbi | Add claude.ai + platform.claude.com to egress allowlist (subscription OAuth needs them, not just api.anthropic.com); ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1; NET-04 checks 3 hosts; NET-05 deny-posture-only (curl can't test binary-scoped allows) | 2026-06-19 | a6c8e83 | [260619-fbi-add-claude-auth-hosts-to-egress-allowlis](./quick/260619-fbi-add-claude-auth-hosts-to-egress-allowlis/) |
 | fast | policy.yaml: grant /home/sandbox in filesystem_policy so claude can persist ~/.claude OAuth token (Landlock default-deny blocked runtime home → login didn't persist) | 2026-06-19 | 851eae4 | — |
 | fast | rebuild.sh: connect/login land in /claudeshared via exec --tty --workdir (connect verb has no cwd flag; / is not Landlock-listable) | 2026-06-19 | 6338120 | — |
+| 260620-sxf | Fix missing GSD skills in sandbox: gsd-core --claude --global ran as root (→ /root/.claude) but runtime user is 'sandbox' (→ /home/sandbox/.claude); move useradd before install, run integration as sandbox user, add fail-closed build guard | 2026-06-20 | a6e724e | [260620-sxf-fix-missing-gsd-skills-in-sandbox-by-dep](./quick/260620-sxf-fix-missing-gsd-skills-in-sandbox-by-dep/) |
 
 ---
 
 ## Session Continuity
 
-**Last updated**: 2026-06-18 (Quick task 260618-p6b complete — npm cooldown switched to --min-release-age + explicit script/source policy)
-**Last action**: Quick task 260618-p6b committed (a930856) — Dockerfile/resolve-versions.sh/build-and-lock.sh/CLAUDE.md updated for native npm cooldown and registry-only/script-hardened installs
-**Next action**: Operator runs ./rebuild.sh to validate the new build (verify-pins.sh PASS + in-image claude/gsd-core functional checks); then Phase 4
-**Stopped at**: Phase 3 complete + quick task 260618-p6b complete
+**Last updated**: 2026-06-20 (Quick task 260620-sxf complete — GSD integration now deployed into the runtime sandbox user's home)
+**Last action**: Quick task 260620-sxf committed (a6e724e) — Dockerfile: sandbox user created before GSD install; gsd-core --claude --global runs as 'sandbox' into /home/sandbox/.claude; fail-closed build guard (Step 4c)
+**Next action**: Operator runs ./rebuild.sh (Step 4c guards the fix), then ./rebuild.sh claude to confirm GSD commands/skills load
+**Stopped at**: Phase 3 complete + quick task 260620-sxf complete
 **Resume file**: None
 
 ---

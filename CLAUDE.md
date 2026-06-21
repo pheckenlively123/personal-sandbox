@@ -1,3 +1,9 @@
+@AGENTS.md
+
+<!-- The line above imports the agent-agnostic guide (project orientation, the docs/ index,
+     cross-cutting conventions, and common pitfalls). This CLAUDE.md adds the fuller project
+     reference + Claude Code-specific context below. Domain depth lives in docs/*-guidelines.md. -->
+
 <!-- GSD:project-start source:PROJECT.md -->
 
 ## Project

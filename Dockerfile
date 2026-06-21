@@ -48,18 +48,55 @@ ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 RUN go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION} && \
     cp /root/go/bin/govulncheck /usr/local/bin/govulncheck
 
+# Step 3c: Create the 'sandbox' user/group BEFORE deploying GSD's ~/.claude integration.
+# The OpenShell supervisor runs as root and drops privileges into a user named 'sandbox'
+# (UID/GID 1000) at runtime, so `claude` reads /home/sandbox/.claude — NOT /root/.claude.
+# gsd-core --claude --global writes into $HOME/.claude, so it MUST run as 'sandbox' (Step 4b);
+# running it as root deposits the GSD commands/agents/skills in root's home where they are
+# invisible at runtime (the "GSD skills missing under ./rebuild.sh claude" bug, 260620-sxf).
+# The user must therefore exist before Step 4b. UID/GID 1000 is sufficient — the supervisor
+# only checks the name, and virtiofs maps container UIDs to the host user on macOS regardless
+# of the UID value (D-09). --no-log-init avoids a sparse /var/log/lastlog. No trailing USER
+# instruction: the supervisor runs as root and drops privileges itself.
+RUN groupadd -g 1000 sandbox \
+    && useradd -m -u 1000 -g sandbox -s /bin/bash --no-log-init sandbox
+
 # Step 4: gsd-core via npm — explicit version pin + --before date (PIN-04, D-02).
 # --before="${COOLDOWN_DATE}T23:59:59Z" pins the full transitive tree to versions published
 # on or before the cooldown date (widely supported by old and new npm alike).
 # GSD_CORE_VERSION is the pre-resolved top-level pin (from resolve-versions.sh).
 # Script policy: --ignore-scripts — gsd-core has no install/preinstall/postinstall scripts;
-# setup is done by the explicit gsd-core --claude --global call below.
+# setup is done by the explicit gsd-core --claude --global call in Step 4b below.
 # Source policy: --allow-git/remote/directory=none — registry-only; defaults are permissive (all).
+# The -g install (system-wide bins under the npm prefix) runs as root — that is correct; only
+# the ~/.claude integration (Step 4b) must run as the runtime 'sandbox' user.
 RUN npm install -g @opengsd/gsd-core@${GSD_CORE_VERSION} \
         --before="${COOLDOWN_DATE}T23:59:59Z" \
         --ignore-scripts \
-        --allow-git=none --allow-remote=none --allow-directory=none && \
-    gsd-core --claude --global
+        --allow-git=none --allow-remote=none --allow-directory=none
+
+# Step 4b: Deploy GSD's Claude integration (commands, hooks, agents, skills) into the RUNTIME
+# user's home. Runs as 'sandbox' with HOME=/home/sandbox so the files land in
+# /home/sandbox/.claude — the home the OpenShell supervisor uses at runtime and where the
+# in-sandbox OAuth login writes ~/.claude/.credentials.json. PATH is carried from the build
+# env (where the npm -g bin dir resolved gsd-core) so the binary is found under the
+# de-escalated shell. Doing this as root (the prior bug) deposited the integration in
+# /root/.claude, invisible to the runtime 'sandbox' user — GSD skills were missing under
+# `./rebuild.sh claude` (260620-sxf).
+RUN su sandbox -s /bin/bash -c "HOME=/home/sandbox PATH=$PATH gsd-core --claude --global"
+
+# Step 4c: Fail-closed build guard (260620-sxf). Assert the GSD integration actually landed in
+# the runtime user's home, owned by 'sandbox'. If gsd-core --claude --global ever stops writing
+# here (wrong user, npm layout change, silent failure) the build MUST fail rather than ship a
+# sandbox whose GSD skills are missing under `./rebuild.sh claude`. This is the regression
+# tripwire for the bug this step fixes — keep it in sync with Step 4b.
+RUN owner="$(stat -c '%U' /home/sandbox/.claude 2>/dev/null || true)"; \
+    if [ "$owner" != "sandbox" ]; then \
+        echo "BUILD FAIL: /home/sandbox/.claude missing or not owned by sandbox (260620-sxf)" >&2; exit 1; \
+    fi; \
+    if [ ! -d /home/sandbox/.claude/agents ] && [ ! -d /home/sandbox/.claude/commands ]; then \
+        echo "BUILD FAIL: GSD integration (agents/ or commands/) not deployed into /home/sandbox/.claude (260620-sxf)" >&2; exit 1; \
+    fi
 
 # Step 5: Claude Code CLI via npm — explicit version pin + --before date (PIN-05).
 # --before="${COOLDOWN_DATE}T23:59:59Z" pins the full transitive tree to versions published
@@ -99,15 +136,10 @@ RUN { npm ls -g --json --depth=Infinity > /versions-npm.json || true; } && \
 # (after the heavy installs) so it only rebuilds a thin trailing layer.
 RUN dnf install -y iproute && dnf clean all
 
-# Step 8: Create the 'sandbox' user and group required by the OpenShell sandbox supervisor.
-# The supervisor (/opt/openshell/bin/openshell-sandbox) de-escalates into a user named 'sandbox';
-# if the user or group is absent the container exits immediately with
-# "sandbox user 'sandbox' not found in image". UID/GID 1000 is sufficient — the supervisor
-# only checks the name, and virtiofs maps container UIDs to the host user on macOS regardless
-# of the UID value (D-09). --no-log-init avoids a sparse /var/log/lastlog. No trailing
-# USER instruction: the supervisor runs as root and drops privileges itself.
-RUN groupadd -g 1000 sandbox \
-    && useradd -m -u 1000 -g sandbox -s /bin/bash --no-log-init sandbox
+# Step 8: (moved) The 'sandbox' user/group — required by the OpenShell supervisor, which
+# de-escalates into a user named 'sandbox' at runtime — is now created earlier, at Step 3c,
+# because GSD's ~/.claude integration (Step 4b) must be deployed AS that user so the skills
+# are visible at runtime (260620-sxf). Nothing to do here.
 
 # Runtime default for direct `podman run` only (D-03 resolution).
 # OpenShell sandbox create always overrides CMD via `-- COMMAND`; the supervisor (PID 1)

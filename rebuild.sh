@@ -603,6 +603,14 @@ log_step 4 "Create sandbox"
 CLAUDESHARED_ABS="${HOME}/claudeshared"
 mkdir -p "${CLAUDESHARED_ABS}"
 
+# Stage zero-egress CLAUDE.md if absent (idempotent — never overwrites an existing file)
+if [[ ! -f "${CLAUDESHARED_ABS}/CLAUDE.md" ]]; then
+    cp "${PROJECT_ROOT}/templates/CLAUDE.md" "${CLAUDESHARED_ABS}/CLAUDE.md"
+    log_info "Staged CLAUDE.md into ${CLAUDESHARED_ABS}/"
+else
+    log_info "CLAUDE.md already present in ${CLAUDESHARED_ABS}/ — not overwriting"
+fi
+
 # T-02-04 mitigation: validate CLAUDESHARED_ABS is an absolute path with no
 # JSON special characters (quote, backslash) before JSON interpolation.
 # No shell-level command substitution of CLI output anywhere in this script.

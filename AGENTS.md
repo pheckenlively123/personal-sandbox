@@ -50,6 +50,7 @@ scripts/                # delegated logic (rebuild.sh wraps these)
   build-and-lock.sh     #   end-to-end: resolve → podman build → extract → lock → verify
   verify-pins.sh        #   fail-closed PIN-07 gate (re-queries registries)
   audit-plugins.sh      #   strict hard-failing plugin/telemetry audit harness
+  preflight-gateway-bind-mount.sh  # RUN-05 fail-closed gateway bind-mount preflight (read-only)
 tests/                  # bash negative-path guard tests (no runner, no CI)
   test-pin-held.sh      #   proves verifier rejects a tampered pin
   test-cache-bust.sh    #   proves cooldown-date ARG busts the layer cache

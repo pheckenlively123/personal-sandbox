@@ -114,6 +114,18 @@ Each run is a **full clean rebuild** (decision D-01): it tears down any existing
 and all `localhost/claude-sandbox:*` images before creating a fresh sandbox. The teardown step
 tolerates an absent sandbox or images (decision D-02, idempotent). There is no partial-update path.
 
+**First-time host setup (required):** the `~/claudeshared` bind mount needs the OpenShell gateway
+to allow bind mounts. Ensure `~/.config/openshell/gateway.toml` contains:
+
+```toml
+[openshell.drivers.podman]
+enable_bind_mounts = true
+```
+
+then restart the gateway so it reloads (Linux: `systemctl --user restart openshell`; macOS:
+`brew services restart openshell`). The rebuild enforces this fail-closed (RUN-05 preflight, step 5
+below) and aborts with these exact instructions if it is unset — it does **not** edit host config for you.
+
 ### Available verbs
 
 ```
@@ -147,14 +159,22 @@ tolerates an absent sandbox or images (decision D-02, idempotent). There is no p
 3. **Tag `:latest`** — adds a `localhost/claude-sandbox:latest` alias to the date-tagged image.
 4. **Teardown** — deletes the existing `claude-sandbox` sandbox (tolerate-absent) and removes
    old `localhost/claude-sandbox:*` images from the podman store.
-5. **Create** — runs `openshell sandbox create --from localhost/claude-sandbox:<date>` with:
+5. **Gateway bind-mount preflight (RUN-05)** — delegates to
+   `scripts/preflight-gateway-bind-mount.sh`, which reads `~/.config/openshell/gateway.toml`
+   and aborts (fail-closed) unless `enable_bind_mounts = true` is set under
+   `[openshell.drivers.podman]`. It is **read-only** — it never modifies host config or
+   restarts the gateway; on failure it prints exactly what to add and how to restart the
+   gateway (Linux: `systemctl --user restart openshell`; macOS:
+   `brew services restart openshell`). This turns the otherwise-cryptic mid-build podman
+   bind-mount error on a fresh host into an actionable message before sandbox create.
+6. **Create** — runs `openshell sandbox create --from localhost/claude-sandbox:<date>` with:
    - `--policy ./policy.yaml` — grants Landlock write access to `/claudeshared` and the runtime
      user home; sets **both** egress allowlists (`claude_egress` + `go_egress`, passthrough,
      binary-scoped).
    - `--driver-config-json` bind mount: `$HOME/claudeshared` → `/claudeshared` (read-write).
    - `--no-tty -- /bin/true` — creates the sandbox without an interactive session.
    After create, the script verifies the sandbox is running before continuing.
-6. **NET-04 policy assertion** — queries the live sandbox policy via `openshell policy get` and
+7. **NET-04 policy assertion** — queries the live sandbox policy via `openshell policy get` and
    aborts (fatal gate) unless:
    - all three `claude_egress` hosts (`api.anthropic.com`, `platform.claude.com`, `claude.ai`)
      are present at port 443, passthrough (no `protocol` field), and `claude`-scoped;
@@ -162,7 +182,7 @@ tolerates an absent sandbox or images (decision D-02, idempotent). There is no p
      at port 443, passthrough, and Go-toolchain-scoped;
    - the two scopes do **not** cross (no Go binary in `claude_egress`; no `*/claude` in `go_egress`);
    - `statsig.anthropic.com` and `sentry.io` are absent.
-7. **NET-05 egress smoke test** — asserts **deny posture only** using `curl` from inside the
+8. **NET-05 egress smoke test** — asserts **deny posture only** using `curl` from inside the
    sandbox. `curl` is neither the `claude` nor a Go binary, so binary-scoping blocks it from
    reaching ANY host. The test asserts that non-allowlisted targets are blocked:
    - `statsig.anthropic.com`, `sentry.io`, `www.google.com` → must be **blocked** (fatal gate).

@@ -30,6 +30,8 @@
 #   2. Resolve cooldown versions and build container image (delegates to build-and-lock.sh)
 #   3. Tag :latest alias
 #   4. Teardown existing sandbox and images (tolerate-absent — idempotent)
+#   4.5 RUN-05 — Preflight: verify host gateway enables bind mounts (fail-closed,
+#       read-only; delegates to scripts/preflight-gateway-bind-mount.sh)
 #   5. Create sandbox with ~/claudeshared bind mount and policy.yaml
 #   6. NET-04: Assert effective live policy = all 3 claude-egress hosts present, passthrough,
 #      claude-scoped, no statsig.anthropic.com, no sentry.io (FATAL)
@@ -594,6 +596,18 @@ fi
 # Prune dangling layers only (safe — does not remove named images)
 podman image prune --force >/dev/null 2>&1 || true
 log_info "Image teardown complete"
+
+# ---------------------------------------------------------------------------
+# Step 3.5: RUN-05 — Preflight gateway bind-mount config (D-05 delegation)
+# Fail-closed BEFORE Step 4: the ~/claudeshared bind mount (RUN-03/RUN-04) is
+# unusable unless the host gateway sets enable_bind_mounts = true under
+# [openshell.drivers.podman]. The delegated script is READ-ONLY (never modifies
+# host config / restarts the gateway) and exits 1 with remediation if unset; the
+# set -e propagation aborts the rebuild here, before `openshell sandbox create`
+# fails cryptically inside podman.
+# ---------------------------------------------------------------------------
+log_step 3.5 "RUN-05 — Preflight: gateway bind-mount enabled"
+bash "${PROJECT_ROOT}/scripts/preflight-gateway-bind-mount.sh"
 
 # ---------------------------------------------------------------------------
 # Step 4: Create sandbox with bind mount and policy (RUN-03/RUN-04, BLD-06)

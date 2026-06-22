@@ -110,6 +110,7 @@ CLAUDE.md Core Value + Network Policy reconciled.
 | fast | policy.yaml: grant /home/sandbox in filesystem_policy so claude can persist ~/.claude OAuth token (Landlock default-deny blocked runtime home → login didn't persist) | 2026-06-19 | 851eae4 | — |
 | fast | rebuild.sh: connect/login land in /claudeshared via exec --tty --workdir (connect verb has no cwd flag; / is not Landlock-listable) | 2026-06-19 | 6338120 | — |
 | 260620-sxf | Fix missing GSD skills in sandbox: gsd-core --claude --global ran as root (→ /root/.claude) but runtime user is 'sandbox' (→ /home/sandbox/.claude); move useradd before install, run integration as sandbox user, add fail-closed build guard | 2026-06-20 | a6e724e | [260620-sxf-fix-missing-gsd-skills-in-sandbox-by-dep](./quick/260620-sxf-fix-missing-gsd-skills-in-sandbox-by-dep/) |
+| 260622-omo | RUN-05 fail-closed gateway bind-mount preflight: rebuild.sh verifies enable_bind_mounts=true under [openshell.drivers.podman] in gateway.toml before sandbox create (read-only, never edits host config); makes the repo portable to fresh hosts (e.g. Fedora) instead of failing mid-build with a cryptic podman error | 2026-06-22 | f9b834f | [260622-omo-make-openshell-gateway-enable-bind-mount](./quick/260622-omo-make-openshell-gateway-enable-bind-mount/) |
 
 ---
 

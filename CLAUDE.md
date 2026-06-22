@@ -249,7 +249,7 @@ A reproducible, network-isolated development sandbox — built as an NVIDIA Open
 | `golangci-lint` (RPM) | 2.11.3 (fc44) | `golang@1.26` | Upstream golangci-lint 2.x supports Go 1.22+ |
 | `@anthropic-ai/claude-code` | 2.1.169 | Node.js 18+ | Fedora 44 nodejs will provide a compatible version |
 | `@opengsd/gsd-core` | 1.4.0 | `@anthropic-ai/claude-code@2.1.169` | gsd-core is runtime-agnostic; installs hooks/commands into `~/.claude` |
-| OpenShell CLI | 0.0.62 | Podman driver (configured) | `enable_bind_mounts = true` already set |
+| OpenShell CLI | 0.0.62 | Podman driver (configured) | `enable_bind_mounts = true` under `[openshell.drivers.podman]` is a REQUIRED host precondition (not auto-configured); `rebuild.sh` verifies it fail-closed before sandbox create (RUN-05 preflight, `scripts/preflight-gateway-bind-mount.sh`) |
 
 ## Sources
 

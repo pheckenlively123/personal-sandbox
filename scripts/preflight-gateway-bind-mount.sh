@@ -62,7 +62,7 @@ remediation() {
         echo "       enable_bind_mounts = true"
         echo ""
         echo "  2. Restart the gateway so it reloads the config:"
-        echo "       Linux:  systemctl --user restart openshell"
+        echo "       Linux:  systemctl --user restart openshell-gateway"
         echo "       macOS:  brew services restart openshell"
         echo ""
         echo "  3. Re-run ./rebuild.sh"

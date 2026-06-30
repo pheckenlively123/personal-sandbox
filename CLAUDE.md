@@ -250,6 +250,7 @@ A reproducible, network-isolated development sandbox — built as an NVIDIA Open
 | `@anthropic-ai/claude-code` | 2.1.169 | Node.js 18+ | Fedora 44 nodejs will provide a compatible version |
 | `@opengsd/gsd-core` | 1.4.0 | `@anthropic-ai/claude-code@2.1.169` | gsd-core is runtime-agnostic; installs hooks/commands into `~/.claude` |
 | OpenShell CLI | 0.0.62 | Podman driver (configured) | `enable_bind_mounts = true` under `[openshell.drivers.podman]` is a REQUIRED host precondition (not auto-configured); `rebuild.sh` verifies it fail-closed before sandbox create (RUN-05 preflight, `scripts/preflight-gateway-bind-mount.sh`) |
+| OpenShell supervisor image | pin to gateway version (`0.0.62`) | OpenShell gateway `0.0.62` | `supervisor_image` under `[openshell.drivers.podman]` MUST be pinned to a non-`:latest` tag matching the gateway. The gateway default `ghcr.io/nvidia/openshell/supervisor:latest` is re-pulled (pull policy `newer`) on every create and can drift NEWER than the pinned gateway, breaking the in-sandbox supervisor's netns setup (`Invalid argument (os error 22)` → `sandbox is not ready`). `rebuild.sh` verifies the pin fail-closed before sandbox create (RUN-06 preflight, `scripts/preflight-supervisor-pin.sh`); re-pin after `brew upgrade openshell` |
 
 ## Sources
 

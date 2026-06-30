@@ -32,6 +32,9 @@
 #   4. Teardown existing sandbox and images (tolerate-absent — idempotent)
 #   4.5 RUN-05 — Preflight: verify host gateway enables bind mounts (fail-closed,
 #       read-only; delegates to scripts/preflight-gateway-bind-mount.sh)
+#   4.6 RUN-06 — Preflight: verify host gateway pins supervisor_image to a
+#       non-:latest tag (fail-closed, read-only; delegates to
+#       scripts/preflight-supervisor-pin.sh)
 #   5. Create sandbox with ~/claudeshared bind mount and policy.yaml
 #   6. NET-04: Assert effective live policy = all 3 claude-egress hosts present, passthrough,
 #      claude-scoped, no statsig.anthropic.com, no sentry.io (FATAL)
@@ -608,6 +611,21 @@ log_info "Image teardown complete"
 # ---------------------------------------------------------------------------
 log_step 3.5 "RUN-05 — Preflight: gateway bind-mount enabled"
 bash "${PROJECT_ROOT}/scripts/preflight-gateway-bind-mount.sh"
+
+# ---------------------------------------------------------------------------
+# Step 3.6: RUN-06 — Preflight: supervisor image pinned (D-05 delegation)
+# Fail-closed BEFORE Step 4: the gateway's default supervisor reference is the
+# floating `...supervisor:latest`, ensured with pull policy "newer". A freshly
+# published :latest (newer than the pinned gateway) gets re-pulled on the next
+# create; its in-container netns setup then fails with "Invalid argument (os
+# error 22)" and the sandbox never becomes ready ("sandbox is not ready" / ssh
+# 255). The delegated script is READ-ONLY (never modifies host config / restarts
+# the gateway) and exits 1 with remediation unless gateway.toml pins
+# supervisor_image to a non-`latest` tag; set -e propagation aborts the rebuild
+# here, before `openshell sandbox create` pulls a drifted supervisor.
+# ---------------------------------------------------------------------------
+log_step 3.6 "RUN-06 — Preflight: supervisor image pinned"
+bash "${PROJECT_ROOT}/scripts/preflight-supervisor-pin.sh"
 
 # ---------------------------------------------------------------------------
 # Step 4: Create sandbox with bind mount and policy (RUN-03/RUN-04, BLD-06)

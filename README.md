@@ -115,16 +115,23 @@ and all `localhost/claude-sandbox:*` images before creating a fresh sandbox. The
 tolerates an absent sandbox or images (decision D-02, idempotent). There is no partial-update path.
 
 **First-time host setup (required):** the `~/claudeshared` bind mount needs the OpenShell gateway
-to allow bind mounts. Ensure `~/.config/openshell/gateway.toml` contains:
+to allow bind mounts, and the gateway must pin the supervisor image to the version it was built
+for. Ensure `~/.config/openshell/gateway.toml` contains:
 
 ```toml
 [openshell.drivers.podman]
 enable_bind_mounts = true
+# Pin to YOUR installed gateway version (`openshell --version`), NOT literally 0.0.62.
+# The default is the floating `...supervisor:latest`, which is re-pulled (policy
+# "newer") and can drift NEWER than the gateway — breaking the in-sandbox
+# supervisor's netns setup ("Invalid argument (os error 22)" → "sandbox is not ready").
+supervisor_image = "ghcr.io/nvidia/openshell/supervisor:0.0.62"
 ```
 
 then restart the gateway so it reloads (Linux: `systemctl --user restart openshell`; macOS:
-`brew services restart openshell`). The rebuild enforces this fail-closed (RUN-05 preflight, step 5
-below) and aborts with these exact instructions if it is unset — it does **not** edit host config for you.
+`brew services restart openshell`). The rebuild enforces both fail-closed (RUN-05 bind-mount preflight
+step 5, RUN-06 supervisor-pin preflight step 6 below) and aborts with the exact instructions if either
+is unset — it does **not** edit host config for you. Re-check the pin after `brew upgrade openshell`.
 
 ### Available verbs
 
@@ -167,14 +174,23 @@ below) and aborts with these exact instructions if it is unset — it does **not
    gateway (Linux: `systemctl --user restart openshell`; macOS:
    `brew services restart openshell`). This turns the otherwise-cryptic mid-build podman
    bind-mount error on a fresh host into an actionable message before sandbox create.
-6. **Create** — runs `openshell sandbox create --from localhost/claude-sandbox:<date>` with:
+6. **Supervisor-pin preflight (RUN-06)** — delegates to
+   `scripts/preflight-supervisor-pin.sh`, which reads `~/.config/openshell/gateway.toml`
+   and aborts (fail-closed) unless `supervisor_image` under `[openshell.drivers.podman]`
+   is pinned to a **non-`:latest`** tag. The gateway otherwise defaults to the floating
+   `...supervisor:latest` (pull policy `newer`); a freshly published `:latest` can drift
+   newer than the installed gateway, breaking the in-sandbox supervisor's network-namespace
+   setup (`Invalid argument (os error 22)` → `sandbox is not ready`). It is **read-only**
+   (any tag other than `latest` passes — the version is not hardcoded, so it survives a
+   `brew upgrade` + re-pin) and on failure prints the exact pin to add plus the restart command.
+7. **Create** — runs `openshell sandbox create --from localhost/claude-sandbox:<date>` with:
    - `--policy ./policy.yaml` — grants Landlock write access to `/claudeshared` and the runtime
      user home; sets **both** egress allowlists (`claude_egress` + `go_egress`, passthrough,
      binary-scoped).
    - `--driver-config-json` bind mount: `$HOME/claudeshared` → `/claudeshared` (read-write).
    - `--no-tty -- /bin/true` — creates the sandbox without an interactive session.
    After create, the script verifies the sandbox is running before continuing.
-7. **NET-04 policy assertion** — queries the live sandbox policy via `openshell policy get` and
+8. **NET-04 policy assertion** — queries the live sandbox policy via `openshell policy get` and
    aborts (fatal gate) unless:
    - all three `claude_egress` hosts (`api.anthropic.com`, `platform.claude.com`, `claude.ai`)
      are present at port 443, passthrough (no `protocol` field), and `claude`-scoped;
@@ -182,7 +198,7 @@ below) and aborts with these exact instructions if it is unset — it does **not
      at port 443, passthrough, and Go-toolchain-scoped;
    - the two scopes do **not** cross (no Go binary in `claude_egress`; no `*/claude` in `go_egress`);
    - `statsig.anthropic.com` and `sentry.io` are absent.
-8. **NET-05 egress smoke test** — asserts **deny posture only** using `curl` from inside the
+9. **NET-05 egress smoke test** — asserts **deny posture only** using `curl` from inside the
    sandbox. `curl` is neither the `claude` nor a Go binary, so binary-scoping blocks it from
    reaching ANY host. The test asserts that non-allowlisted targets are blocked:
    - `statsig.anthropic.com`, `sentry.io`, `www.google.com` → must be **blocked** (fatal gate).

@@ -51,6 +51,7 @@ scripts/                # delegated logic (rebuild.sh wraps these)
   verify-pins.sh        #   fail-closed PIN-07 gate (re-queries registries)
   audit-plugins.sh      #   strict hard-failing plugin/telemetry audit harness
   preflight-gateway-bind-mount.sh  # RUN-05 fail-closed gateway bind-mount preflight (read-only)
+  preflight-supervisor-pin.sh      # RUN-06 fail-closed supervisor-image pin preflight (read-only)
 tests/                  # bash negative-path guard tests (no runner, no CI)
   test-pin-held.sh      #   proves verifier rejects a tampered pin
   test-cache-bust.sh    #   proves cooldown-date ARG busts the layer cache

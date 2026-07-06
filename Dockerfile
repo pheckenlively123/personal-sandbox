@@ -31,6 +31,7 @@ RUN dnf update -y && \
         git \
         jq \
         ca-certificates \
+        ShellCheck \
     && dnf clean all
 
 # Step 2: Node/npm version assertion for diagnostics (Open Question 3).

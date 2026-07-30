@@ -6,7 +6,7 @@ Agent-agnostic onboarding for any AI tool (Claude Code, Cursor, CodeRabbit, etc.
 
 This is a **reproducible, network-isolated development sandbox** — an NVIDIA OpenShell sandbox built from a Fedora 44 image — for running Claude Code with `--dangerously-skip-permissions` safely. The sandbox bundles a Go toolchain plus the claude-engineering-toolkit plugins, applies rolling supply-chain cooldown pinning to its dependencies, and mounts `~/claudeshared` read-write so the operator can clone repos and develop with Claude inside it.
 
-Networking is **Architecture B**: two binary-scoped, TLS-passthrough egress allowlists and nothing else reaches the internet.
+Networking is **Architecture B**: two binary-scoped, TLS-passthrough egress allowlists and nothing else reaches the internet. A third, optional, `claude`-scoped allowlist (`local_model_egress`) ships commented-out and default-off for opting a sandbox into a host-side local-model proxy — see the docs index below.
 - `claude_egress` — `api.anthropic.com:443`, `platform.claude.com:443`, `claude.ai:443`, scoped to the `claude` binary only (subscription OAuth; no `ANTHROPIC_API_KEY`, no gateway).
 - `go_egress` — `proxy.golang.org:443`, `sum.golang.org:443`, `vuln.go.dev:443`, scoped to the Go binaries only.
 
@@ -21,8 +21,9 @@ The two scopes are isolated from each other — that isolation is the core secur
 | [`docs/testing-guidelines.md`](docs/testing-guidelines.md) | Add or change anything under `tests/` or an audit harness. "Prove the guard, not the happy path"; seed tampered input, assert exact exit codes. |
 | [`docs/integration-guidelines.md`](docs/integration-guidelines.md) | Touch any seam between podman, OpenShell CLI, npm registry, Go proxy, or the claude binary. Never-trust-raw-stdout, `exec` flags, binary-path matching. |
 | [`docs/supply-chain-guidelines.md`](docs/supply-chain-guidelines.md) | Change a dependency, pin, the Dockerfile installs, or the resolve/verify/lock flow. The rolling cooldown discipline and required npm flag set. |
+| [`docs/local-models-guidelines.md`](docs/local-models-guidelines.md) | Point Claude Code at a host-side local-model proxy, touch the `local_model_egress` block, or change the `claude-local` verb. |
 
-These five files hold the domain depth. This document only indexes them — do not duplicate their content into changes here.
+These six files hold the domain depth. This document only indexes them — do not duplicate their content into changes here.
 
 ## Cross-cutting conventions
 

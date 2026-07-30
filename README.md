@@ -18,8 +18,9 @@ For agent onboarding and the layered domain docs, see the **Documentation** sect
 | [`docs/testing-guidelines.md`](docs/testing-guidelines.md) | Negative-path guard tests — prove the guard, seed tampered input, assert exact exit codes. |
 | [`docs/integration-guidelines.md`](docs/integration-guidelines.md) | Seams between podman, OpenShell CLI, npm, the Go proxy, and the claude binary. |
 | [`docs/supply-chain-guidelines.md`](docs/supply-chain-guidelines.md) | Rolling cooldown pin discipline and the required npm flag set. |
+| [`docs/local-models-guidelines.md`](docs/local-models-guidelines.md) | The opt-in path to a host-side local-model proxy — what this repo ships, what the operator must build, and the security trade-offs. |
 
-The five `docs/*-guidelines.md` files hold the domain depth — this README links to them rather than
+The six `docs/*-guidelines.md` files hold the domain depth — this README links to them rather than
 duplicating them.
 
 ## Tech stack
@@ -141,6 +142,7 @@ is unset — it does **not** edit host config for you. Re-check the pin after `b
 ./rebuild.sh connect                         # Attach to running sandbox shell
 ./rebuild.sh login                           # Connect + guide through Claude OAuth flow
 ./rebuild.sh claude                          # Launch autonomous Claude session (skip-permissions + plugins)
+./rebuild.sh claude-local --base-url <url>   # Launch Claude Code against a host-side local-model proxy (opt-in)
 ./rebuild.sh down                            # Delete sandbox (idempotent; no native stop)
 ./rebuild.sh audit [--since <ts>]            # Surface openshell logs without rebuilding
 ./rebuild.sh audit-plugins                   # Strict headless plugin audit (hard-fails on mismatch)
@@ -152,6 +154,11 @@ is unset — it does **not** edit host config for you. Re-check the pin after `b
   `claude --dangerously-skip-permissions --plugin-dir /opt/claude-engineering-toolkit`
   (via `openshell sandbox exec --tty --workdir /claudeshared`). Prerequisites: sandbox created
   (`./rebuild.sh`) + OAuth login (`./rebuild.sh login`).
+- **`claude-local`** launches the same session but with `ANTHROPIC_BASE_URL` set at exec time to
+  `--base-url <url>` (or the `LOCAL_MODEL_BASE_URL` env var), pointing Claude Code at a host-side
+  local-model proxy instead of `api.anthropic.com`. Opt-in and off by default — see
+  [`docs/local-models-guidelines.md`](docs/local-models-guidelines.md) and the "Running against a
+  local model" section below.
 - **`audit`** is **log-surfacing only** — it runs `openshell logs` and never asserts policy.
 - **`audit-plugins`** is the strict, hard-failing audit harness — it drives every toolkit
   agent/skill headless against the running sandbox and **exits 1** on any expected/actual mismatch.
@@ -261,6 +268,26 @@ Use `--dangerously-skip-permissions` (this is what the verb passes) — not
 `--allow-dangerously-skip-permissions`.
 
 To attach to a plain shell instead (no Claude), use `./rebuild.sh connect`.
+
+---
+
+## Running against a local model (opt-in)
+
+Claude Code can also be pointed at a host-side, locally hosted model (e.g. llama.cpp via your own
+switcher) instead of `api.anthropic.com`. This is **opt-in and off by default** — it requires you
+to build a small translation proxy on the host and to deliberately enable a third, commented-out
+egress allowlist in `policy.yaml`.
+
+Three-line summary:
+
+1. Enable `local_model_egress` in `policy.yaml` (uncomment the template, fill in the real host and
+   port) and re-run `./rebuild.sh` — look for the `NET-06 PASS` line.
+2. Have your host-side proxy running and reachable at that address.
+3. `./rebuild.sh claude-local --base-url <url>`
+
+The full setup guide — what the proxy must implement, how to find the sandbox-reachable host
+address, and the security trade-offs of this path — is in
+[`docs/local-models-guidelines.md`](docs/local-models-guidelines.md). Read it before enabling this.
 
 ---
 

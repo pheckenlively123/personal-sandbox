@@ -7,6 +7,7 @@
 #   ./rebuild.sh connect                          # Attach to running sandbox shell
 #   ./rebuild.sh login                            # Connect + launch Claude OAuth login flow
 #   ./rebuild.sh claude                           # Launch autonomous Claude session (--dangerously-skip-permissions + --plugin-dir)
+#   ./rebuild.sh claude-local --base-url <url>    # Launch Claude Code against a host-side local-model proxy (opt-in, NET-06/RUN-07)
 #   ./rebuild.sh down                             # Delete sandbox (idempotent)
 #   ./rebuild.sh audit [--since <ts>]             # Surface openshell logs
 #   ./rebuild.sh audit-plugins                    # Strict headless plugin audit (hard-fails on mismatch)
@@ -243,6 +244,85 @@ assert_claude_egress_allowlist() {
 }
 
 # ---------------------------------------------------------------------------
+# NET-06 conditional assertion — opt-in local_model_egress, if present (D-01/D-03)
+# ---------------------------------------------------------------------------
+# Unlike NET-04 (always required), this only fires if the operator has
+# uncommented the local_model_egress template in policy.yaml. Absence is the
+# default posture and a PASS (return 0 — nothing to assert). If present, this
+# asserts the operator filled in the template correctly and did not widen the
+# scope: non-empty endpoints, no `protocol` field, the placeholder host
+# replaced, and every binary matching */claude (no cross-scoping).
+assert_local_model_egress_if_present() {
+    local sandbox_name="${1}"
+    local policy_json
+    # Guard the fetch (same two-step pattern as assert_claude_egress_allowlist,
+    # NET-04): a failed or non-JSON fetch must abort — it must never read as
+    # "block absent" (that would silently skip a real violation).
+    if ! policy_json=$(openshell policy get "${sandbox_name}" --full -o json 2>&1); then
+        log_error "NET-06: 'openshell policy get ${sandbox_name} --full -o json' failed — cannot assert local-model-egress policy"
+        log_error "Output: ${policy_json}"
+        exit 1
+    fi
+    if ! echo "${policy_json}" | jq empty >/dev/null 2>&1; then
+        log_error "NET-06: policy output is not valid JSON — sandbox may not be running or the policy endpoint errored"
+        log_error "Raw output: ${policy_json}"
+        exit 1
+    fi
+
+    # --- Presence probe: is local-model-egress enabled? ---
+    if ! echo "${policy_json}" | jq -e \
+        '.policy.network_policies // {} | to_entries[] | select(.value.name == "local-model-egress")' \
+        >/dev/null 2>&1; then
+        log_info "NET-06: opt-in local-model-egress not enabled (default posture) — nothing to assert"
+        return 0
+    fi
+
+    log_info "NET-06: local-model-egress detected in live policy — asserting fail-closed conditions"
+
+    # --- Require endpoints non-empty ---
+    if ! echo "${policy_json}" | jq -e \
+        '.policy.network_policies // {} | to_entries[] | select(.value.name == "local-model-egress") | .value.endpoints | length > 0' \
+        >/dev/null 2>&1; then
+        log_error "NET-06 VIOLATION: local-model-egress is present but has no endpoints!"
+        log_error "Policy output: ${policy_json}"
+        exit 1
+    fi
+
+    # --- Require NO endpoint carries a `protocol` field (passthrough = omit protocol) ---
+    if echo "${policy_json}" | jq -e \
+        '.policy.network_policies // {} | to_entries[] | select(.value.name == "local-model-egress") | .value.endpoints[]? | select(.protocol != null)' \
+        >/dev/null 2>&1; then
+        log_error "NET-06 VIOLATION: a local-model-egress endpoint has a 'protocol' field — must be omitted for TLS passthrough!"
+        log_error "Policy output: ${policy_json}"
+        exit 1
+    fi
+
+    # --- Require the placeholder host does NOT survive into the live policy ---
+    if echo "${policy_json}" | jq -e \
+        '.policy.network_policies // {} | to_entries[] | select(.value.name == "local-model-egress") | .value.endpoints[]? | select(.host == "REPLACE-ME-LOCAL-MODEL-HOST")' \
+        >/dev/null 2>&1; then
+        log_error "NET-06 VIOLATION: local-model-egress still uses the REPLACE-ME-LOCAL-MODEL-HOST placeholder — the operator uncommented the template without filling in the real host!"
+        log_error "Policy output: ${policy_json}"
+        exit 1
+    fi
+
+    # --- Require every binary scoped to local-model-egress to match */claude ---
+    if echo "${policy_json}" | jq -e \
+        '.policy.network_policies // {} | to_entries[] | select(.value.name == "local-model-egress") | .value.binaries[]? | select(.path | test(".*/claude$") | not)' \
+        >/dev/null 2>&1; then
+        log_error "NET-06 VIOLATION: local-model-egress has a binary that does NOT match */claude — cross-scoping breaks the OAuth-token isolation invariant!"
+        log_error "Policy output: ${policy_json}"
+        exit 1
+    fi
+
+    local hosts
+    hosts=$(echo "${policy_json}" | jq -r \
+        '.policy.network_policies // {} | to_entries[] | select(.value.name == "local-model-egress") | .value.endpoints[]?.host' \
+        | tr '\n' ' ')
+    log_info "NET-06 PASS: local-model-egress enabled, claude-scoped, passthrough, host(s): ${hosts}"
+}
+
+# ---------------------------------------------------------------------------
 # NET-05 egress smoke test — deny posture only (Finding 5; redesigned post-login-debugging)
 # ---------------------------------------------------------------------------
 # Asserts that non-allowlisted hosts are BLOCKED from inside the sandbox.
@@ -309,7 +389,7 @@ VERB="rebuild"    # default verb
 # Accept positional verb as first argument; flags follow.
 if [[ $# -gt 0 ]]; then
     case "$1" in
-        rebuild|status|connect|login|claude|down|audit|audit-plugins)
+        rebuild|status|connect|login|claude|claude-local|down|audit|audit-plugins)
             VERB="$1"
             shift
             ;;
@@ -319,7 +399,7 @@ if [[ $# -gt 0 ]]; then
             ;;
         *)
             log_error "Unknown verb or argument: $1"
-            echo "Usage: $0 [rebuild|status|connect|login|claude|down|audit|audit-plugins] [--cooldown-days N]" >&2
+            echo "Usage: $0 [rebuild|status|connect|login|claude|claude-local|down|audit|audit-plugins] [--cooldown-days N]" >&2
             echo "       $0 [--cooldown-days N]   (shorthand for rebuild)" >&2
             echo "       $0 --audit               (shorthand for audit verb)" >&2
             exit 1
@@ -328,6 +408,7 @@ if [[ $# -gt 0 ]]; then
 fi
 
 AUDIT_SINCE=""
+LOCAL_MODEL_BASE_URL="${LOCAL_MODEL_BASE_URL:-}"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --cooldown-days)
@@ -359,9 +440,21 @@ while [[ $# -gt 0 ]]; do
             AUDIT_SINCE="${1#--since=}"
             shift
             ;;
+        --base-url)
+            if [[ -z "${2-}" ]]; then
+                log_error "--base-url requires an argument"
+                exit 1
+            fi
+            LOCAL_MODEL_BASE_URL="$2"
+            shift 2
+            ;;
+        --base-url=*)
+            LOCAL_MODEL_BASE_URL="${1#--base-url=}"
+            shift
+            ;;
         *)
             log_error "Unknown argument: $1"
-            echo "Usage: $0 [rebuild|status|connect|login|claude|down|audit|audit-plugins] [--cooldown-days N]" >&2
+            echo "Usage: $0 [rebuild|status|connect|login|claude|claude-local|down|audit|audit-plugins] [--cooldown-days N]" >&2
             exit 1
             ;;
     esac
@@ -463,6 +556,54 @@ case "${VERB}" in
         set -e
         if [[ ${exec_rc} -ne 0 && ${exec_rc} -ne 130 ]]; then
             log_error "'openshell sandbox exec' for sandbox '${SANDBOX_NAME}' exited ${exec_rc} — if the session didn't start, check './rebuild.sh status' / './rebuild.sh login'."
+        fi
+        exit "${exec_rc}"
+        ;;
+
+    # -----------------------------------------------------------------------
+    # claude-local — launch Claude Code against a host-side local-model proxy
+    # (RUN-07, opt-in, D-01/D-04). Setting ANTHROPIC_BASE_URL at exec time for
+    # this explicit opt-in verb is distinct from the `ENV ANTHROPIC_BASE_URL`
+    # in the Dockerfile that CLAUDE.md's What-NOT-to-Use table forbids — the
+    # default `claude` verb above still sets nothing.
+    # -----------------------------------------------------------------------
+    # Prerequisites: sandbox created (./rebuild.sh), OAuth login (./rebuild.sh
+    # login), the opt-in local_model_egress block enabled in policy.yaml (see
+    # docs/local-models-guidelines.md), and a host-side proxy already running.
+    claude-local)
+        # Validate FIRST, before ensure_podman_ready — this is what makes the
+        # guard testable in a sandbox with no podman/openshell present, and it
+        # is what tests/test-local-model-guard.sh asserts.
+        if [[ -z "${LOCAL_MODEL_BASE_URL}" ]]; then
+            log_error "claude-local requires --base-url <url> or the LOCAL_MODEL_BASE_URL env var"
+            log_error "See docs/local-models-guidelines.md for how to set up and reach a host-side local-model proxy"
+            exit 1
+        fi
+        # Allowlist-validate, never blocklist: reject everything that doesn't match.
+        if ! [[ "${LOCAL_MODEL_BASE_URL}" =~ ^https?://[A-Za-z0-9._-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$ ]]; then
+            log_error "--base-url value is not a valid http(s) URL: ${LOCAL_MODEL_BASE_URL}"
+            exit 1
+        fi
+
+        ensure_podman_ready
+
+        log_info "Launching Claude Code against local-model endpoint: ${LOCAL_MODEL_BASE_URL}"
+        log_info "WARNING: the in-sandbox subscription OAuth token at ~/.claude/.credentials.json remains"
+        log_info "present while Claude Code is pointed at a non-Anthropic endpoint (see the threat register, T-V3J-01)."
+        log_info "Reaching this endpoint additionally requires the opt-in local_model_egress block to be"
+        log_info "enabled in policy.yaml (see docs/local-models-guidelines.md)."
+        set +e
+        openshell sandbox exec \
+            --name "${SANDBOX_NAME}" \
+            --tty \
+            --workdir "${SHARED_DIR}" \
+            -- env ANTHROPIC_BASE_URL="${LOCAL_MODEL_BASE_URL}" claude \
+                --dangerously-skip-permissions \
+                --plugin-dir /opt/claude-engineering-toolkit
+        exec_rc=$?
+        set -e
+        if [[ ${exec_rc} -ne 0 && ${exec_rc} -ne 130 ]]; then
+            log_error "'openshell sandbox exec' for sandbox '${SANDBOX_NAME}' exited ${exec_rc} — if the session didn't start, check './rebuild.sh status' / './rebuild.sh login', and confirm local_model_egress is enabled in policy.yaml."
         fi
         exit "${exec_rc}"
         ;;
@@ -681,6 +822,12 @@ log_step 5 "NET-04 — Assert claude-egress allowlist in live policy (3 hosts, p
 assert_claude_egress_allowlist "${SANDBOX_NAME}"
 
 # ---------------------------------------------------------------------------
+# Step 5.5: NET-06 — Conditional assert: opt-in local-model-egress, if present
+# ---------------------------------------------------------------------------
+log_step 5.5 "NET-06 — Assert local-model-egress (opt-in; PASS if absent, fail-closed if enabled)"
+assert_local_model_egress_if_present "${SANDBOX_NAME}"
+
+# ---------------------------------------------------------------------------
 # Step 6: Egress smoke test — deny posture only (NET-05)
 # ---------------------------------------------------------------------------
 log_step 6 "NET-05 — Egress smoke test: deny posture (statsig/sentry/google blocked)"
@@ -699,7 +846,8 @@ log_info "  ./rebuild.sh login"
 log_info "  (open the URL in a browser OUTSIDE the sandbox, paste the code back)"
 log_info ""
 log_info "Other verbs:"
-log_info "  ./rebuild.sh connect   # attach to sandbox shell"
-log_info "  ./rebuild.sh claude    # launch autonomous Claude session (--dangerously-skip-permissions + plugin-dir)"
-log_info "  ./rebuild.sh audit     # surface openshell logs"
-log_info "  ./rebuild.sh down      # delete sandbox (re-login required after next rebuild)"
+log_info "  ./rebuild.sh connect                        # attach to sandbox shell"
+log_info "  ./rebuild.sh claude                         # launch autonomous Claude session (--dangerously-skip-permissions + plugin-dir)"
+log_info "  ./rebuild.sh claude-local --base-url <url>  # launch Claude Code against a host-side local-model proxy (opt-in, see docs/local-models-guidelines.md)"
+log_info "  ./rebuild.sh audit                          # surface openshell logs"
+log_info "  ./rebuild.sh down                           # delete sandbox (re-login required after next rebuild)"

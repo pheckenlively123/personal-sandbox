@@ -21,6 +21,13 @@
 # CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 (set in Dockerfile) disables
 # auto-updater, telemetry, Sentry error-reporting, and feedback so these hosts are
 # never contacted. All other egress remains denied.
+#
+# Optional third allowlist (opt-in, default-off): `local_model_egress` ships at the
+# bottom of `network_policies` fully COMMENTED OUT — a claude-binary-scoped template
+# for routing Claude Code at a host-side, Anthropic-compatible translation proxy in
+# front of the operator's own local-model setup (NET-06). Until an operator uncomments
+# it and fills in the real host, the active policy below is unchanged: exactly
+# claude_egress and go_egress. See docs/local-models-guidelines.md.
 version: 1
 
 filesystem_policy:
@@ -125,3 +132,52 @@ network_policies:
       - { path: /usr/bin/go }
       - { path: /usr/bin/golangci-lint }
       - { path: /usr/local/bin/govulncheck }
+  # ---------------------------------------------------------------------------
+  # local_model_egress — OPT-IN template, commented-out by default (NET-06,
+  # quick task 260730-v3j: "add support for locally hosted llama.cpp").
+  # ---------------------------------------------------------------------------
+  # A third, independently binary-scoped egress allow for routing the `claude`
+  # binary at a host-side, Anthropic-compatible translation proxy that fronts
+  # the operator's existing llama.cpp switcher. Ships commented-out so the
+  # default posture (claude_egress + go_egress only, above) is byte-identical
+  # until an operator deliberately opts in (D-01, D-03). Follows the go_egress
+  # precedent: a new independently-scoped block, never a widening of
+  # claude_egress. See docs/local-models-guidelines.md for the host-side setup
+  # this depends on and for what remains unconfirmed (D-02, D-03).
+  #
+  # NO `protocol` key on the endpoint: omitting it produces opaque TCP/TLS
+  # passthrough (the proxy never decrypts the stream). Adding `protocol: rest`
+  # would terminate TLS and expose whatever transits this connection — same
+  # rule as claude_egress and go_egress above.
+  #
+  # `binaries:` is claude-binary scope ONLY — the same two paths as
+  # claude_egress and nothing else. Adding a Go binary here, or adding these
+  # claude paths to go_egress, breaks the core isolation invariant.
+  #
+  # REPLACE-ME-LOCAL-MODEL-HOST is a deliberate placeholder, not a hostname.
+  # The address the sandbox can use to reach the host-side proxy is
+  # UNCONFIRMED at plan time (D-03) — no IP is guessed here. To enable:
+  #   1. Determine the reachable host address (see docs/local-models-guidelines.md,
+  #      "Host reachability from the sandbox").
+  #   2. Replace REPLACE-ME-LOCAL-MODEL-HOST below with that address, and
+  #      replace port 8787 with your proxy's actual port.
+  #   3. Uncomment this block (strip the leading "# " from every line below).
+  #   4. Re-run ./rebuild.sh and confirm the NET-06 PASS line.
+  #   5. Launch with: ./rebuild.sh claude-local --base-url <url>
+  #
+  # Fail-closed guard: assert_local_model_egress_if_present() (NET-06, in
+  # rebuild.sh) aborts the rebuild if this block is uncommented while:
+  #   - the placeholder host REPLACE-ME-LOCAL-MODEL-HOST is still present,
+  #   - any endpoint carries a `protocol` field,
+  #   - any non-claude binary is scoped to this policy, or
+  #   - `endpoints:` is empty.
+  #
+#   local_model_egress:
+#     name: local-model-egress
+#     endpoints:
+#       - host: REPLACE-ME-LOCAL-MODEL-HOST
+#         port: 8787
+#         # NO protocol field -> opaque TCP/TLS passthrough; see above.
+#     binaries:
+#       - { path: /usr/bin/claude }
+#       - { path: /usr/local/bin/claude }
